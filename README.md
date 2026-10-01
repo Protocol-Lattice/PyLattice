@@ -1,39 +1,43 @@
 # Python Agent TUI
 
-Pythonowa warstwa wykonania w terminalu korzystająca z **Harness Router** do podejmowania decyzji o wyborze następnego narzędzia oraz modelu OpenRouter's [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) dla argumentów narzędzi i odpowiedzi.
+A Python execution layer in the terminal that uses **Harness Router** to decide the next tool, and OpenRouter's [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) for tool arguments and responses.
 
-## Wymagania
+## Requirements
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (do zarządzania zależnościami)
+- [uv](https://docs.astral.sh/uv/) (for dependency management)
 
-## Szybki start
+## Quick start
 
 ```bash
-# Instalacja zależności
+# Install dependencies
 uv sync
 
-# Skopiowanie szablonu środowiska
+# Copy the environment template
 cp .env.example .env
 
-# Ustaw swój klucz API (lub wyeksportuj go w powłoce)
+# Set your API key (or export it in your shell)
 export OPENROUTER_API_KEY=your_key_here
 
-# Uruchom agenta
+# Run the agent
 uv run agent-tui
 ```
 
+Requests use a 64,000-character context budget, task-relevant history, and a short
+skill catalog. Use `--context-chars N` or `AGENT_TUI_CONTEXT_CHARS` to change the limit.
+`/context` shows usage; `/skill NAME` pins a workflow across tasks.
+
 ## Demo
 
-Aby uruchomić lokalne demo bez poświadczeń i żądań sieciowych:
+To run a local demo without credentials or network requests:
 
 ```bash
 uv run agent-tui --demo
 ```
 
-## Rozszerzenia i pamięć
+## Extensions and memory
 
-Agent obsługuje skille `SKILL.md`, marketplace pluginów (w tym Superpowers), serwery MCP, middleware z hookami, zarządzanie kontekstem i trwałą pamięć SQLite dla workspace.
+The agent supports `SKILL.md` skills, a plugin marketplace (including Superpowers), MCP servers, middleware with hooks, context management, and persistent SQLite memory for the workspace.
 
 ```text
 /plugins
@@ -46,22 +50,22 @@ Agent obsługuje skille `SKILL.md`, marketplace pluginów (w tym Superpowers), s
 /memory
 ```
 
-Przykładowy serwer MCP i hooki uruchamiasz z katalogu projektu:
+To start the example MCP server and hooks, run from the project directory:
 
 ```bash
 uv run agent-tui --extensions examples/extensions.toml
 ```
 
-Konfiguracja, komendy i opis przykładów: [dokumentacja rozszerzeń](docs/extensions.md).
+Configuration, commands, and example descriptions: [extensions documentation](docs/extensions.md).
 
-## Struktura projektu
+## Project structure
 
-- `src/agent_tui/` – Główny kod źródłowy agenta TUI
-- `src/agent_tui/openrouter.py` – Integracja z OpenRouter
-- `src/agent_tui/routing.py` – Logika wyboru następnego narzędzia przez Harness Router
-- `src/agent_tui/tools.py` – Dostępne narzędzia dla agenta
-- `src/agent_tui/__main__.py` – Punkt wejściowy
+- `src/agent_tui/` – Main TUI agent source code
+- `src/agent_tui/openrouter.py` – OpenRouter integration
+- `src/agent_tui/routing.py` – Harness Router next-tool decision logic
+- `src/agent_tui/tools.py` – Tools available to the agent
+- `src/agent_tui/__main__.py` – Entry point
 
-## Licencja
+## License
 
-Ten projekt jest open source. Zobacz plik LICENSE dla szczegółów.
+This project is open source. See the LICENSE file for details.

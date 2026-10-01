@@ -1,0 +1,37 @@
+# Run from the project root: uv run agent-tui --extensions examples/extensions.toml
+# Paths in commands are relative to --workspace.
+
+[mcp_servers.example]
+transport = "stdio"
+command = "python"
+args = ["examples/mcp_server.py"]
+read_only_tools = ["add"]
+timeout = 15
+
+# Streamable HTTP example (enable after setting the URL and token):
+[mcp_servers.remote]
+enabled = false
+transport = "http"
+url = "http://localhost:8000/mcp"
+headers = { Authorization = "Bearer ${MCP_TOKEN}" }
+timeout = 30
+
+[[hooks]]
+event = "before_tool"
+command = ["python", "examples/hooks/protect_files.py"]
+timeout = 5
+
+[[hooks]]
+event = "before_tool"
+command = ["python", "examples/hooks/final_newline.py"]
+timeout = 5
+
+[[hooks]]
+event = "after_tool"
+command = ["python", "examples/hooks/audit_log.py"]
+timeout = 5
+
+[[hooks]]
+event = "after_run"
+command = ["python", "examples/hooks/audit_log.py"]
+timeout = 5

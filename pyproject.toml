@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "python-agent-tui"
+version = "0.1.0"
+description = "A terminal execution layer with Harness Router decisions and an OpenRouter executor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "harness-router @ git+https://github.com/Protocol-Lattice/harness-router.git@51d1acd6d16e7d0656893b8f8475deb9a9bf60e0",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.23,<5",
+  "mcp>=1.12,<2",
+  "python-dotenv>=1.0,<2",
+  "pyyaml>=6,<7",
+  "textual>=1.0,<7",
+]
+
+[project.scripts]
+agent-tui = "agent_tui.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_tui"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

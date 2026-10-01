@@ -1,57 +1,226 @@
+/* Quiet terminal chrome, a continuous transcript, and a soft pink canvas. */
+$rule: #d4acbd;
+
 Screen {
-    background: #0b101b;
-    color: #dce5f3;
+    background: $background;
+    color: $foreground;
 }
+
 #masthead {
-    height: 3;
+    height: 2;
     padding: 1 2 0 2;
-    background: #111a2a;
+    background: $background;
 }
-#brand { width: 1fr; text-style: bold; color: #65dcc5; }
-#stack-label { width: auto; color: #8b9fbc; }
+
+#brand { width: 1fr; color: $primary; text-style: bold; }
+#stack-label { width: auto; color: $secondary; }
+
 #workspace-bar {
     height: 2;
     padding: 0 2;
-    background: #111a2a;
-    border-bottom: solid #24334a;
+    background: $background;
 }
-#workspace { width: 1fr; color: #8293ac; }
-#policy { width: auto; color: #e9b86b; }
+
+#workspace { width: 1fr; color: $secondary; }
+#policy { width: auto; color: $primary; }
 #body { height: 1fr; }
 #conversation-pane { width: 1fr; }
-#conversation { padding: 1 2; scrollbar-color: #344660; }
-.message { height: auto; margin-bottom: 1; padding: 1 2; background: #111a2a; }
-.message-role { height: 1; color: #65dcc5; text-style: bold; margin-bottom: 1; }
-.message-body { height: auto; margin: 0; padding: 0; }
-.user { border-left: thick #a798ef; background: #181d32; }
-.user .message-role { color: #b8aafa; }
-.assistant { border-left: thick #65dcc5; }
-.welcome { border: round #2c3c56; margin: 1 0 2 0; padding: 1 2; }
-.welcome .message-role { color: #91a3bc; }
-.notice { border-left: thick #e9b86b; }
-.notice .message-role { color: #e9b86b; }
-.tool-card { height: auto; margin: 0 0 1 1; padding: 0; background: #0f1826;
-    border: solid #24334a; }
-.tool-content { height: auto; padding: 1; color: #9bacc3; }
-.plan-card { height: auto; margin: 0 0 1 0; padding: 0; background: #181d32;
-    border: solid #51466d; }
-#sidebar { width: 34; background: #0e1624; border-left: solid #24334a; padding: 1 2; }
-.section-title { height: 2; color: #65dcc5; text-style: bold; }
-#phase { height: 2; color: #dce5f3; }
-#routing-mode { height: auto; color: #b8aafa; }
-.field-label { height: 1; margin-top: 1; color: #61738f; text-style: bold; }
-#router-model, #executor-model, #next-tool { height: auto; color: #c7d3e5; }
-#metrics { height: 4; margin-top: 1; padding-top: 1; border-top: solid #24334a; color: #8b9fbc; }
-#activity { height: 1fr; background: #0e1624; scrollbar-size: 1 1; }
-#composer { height: 6; padding: 0 2 1 2; border-top: solid #24334a; background: #111a2a; }
-#composer-label { height: 1; color: #8293ac; }
+
+#conversation {
+    padding: 0 2;
+    background: $background;
+    scrollbar-size: 1 1;
+    scrollbar-color: $boost;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $accent;
+    scrollbar-background: $background;
+}
+
+/* Messages read as terminal output, without a stack of filled cards. */
+.message {
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    background: transparent;
+}
+
+.message-role {
+    height: 1;
+    margin-bottom: 0;
+    color: $primary;
+    text-style: bold;
+}
+
+.message-body { height: auto; margin: 0; padding: 0; color: $foreground; }
+.user { background: $panel; border-left: solid $primary; padding: 0 1; }
+.user .message-role { color: $primary; }
+.assistant { border: none; }
+.notice { border-left: solid $warning; }
+.notice .message-role { color: $warning; }
+
+.welcome {
+    border: round $rule;
+    margin: 0 0 1 0;
+    padding: 1 2;
+}
+
+.welcome .message-role { color: $secondary; }
+
+Markdown { background: transparent; color: $foreground; }
+MarkdownH1, MarkdownH2, MarkdownH3 {
+    border: none;
+    padding: 0;
+    margin: 0 0 1 0;
+    color: $primary;
+    text-style: bold;
+}
+
+MarkdownBlock > .link { color: $primary; text-style: underline; }
+MarkdownBlock > .link:hover { color: $accent; background: $panel; }
+
+/* Indented tool traces stay compact until expanded. */
+.tool-card, .plan-card {
+    height: auto;
+    margin: 0 0 1 1;
+    padding: 0 0 0 1;
+    background: transparent;
+    border: none;
+    border-left: solid $rule;
+}
+
+.tool-card:focus-within, .plan-card:focus-within {
+    background-tint: transparent;
+    border-left: solid $primary;
+}
+
+CollapsibleTitle {
+    padding: 0;
+    color: $secondary;
+    background: transparent;
+}
+
+CollapsibleTitle:hover, CollapsibleTitle:focus {
+    color: $primary;
+    background: $panel;
+    text-style: bold;
+}
+
+.plan-card CollapsibleTitle { color: $primary; }
+.tool-content { height: auto; padding: 0 1 1 1; color: $secondary; }
+
+/* Optional diagnostics: Ctrl+O opens the rail on wider terminals. */
+#sidebar {
+    display: none;
+    width: 30;
+    padding: 0 1;
+    background: $background;
+    border-left: solid $rule;
+}
+
+Screen.show-activity #sidebar { display: block; }
+.section-title { height: 2; color: $primary; text-style: bold; }
+#phase { height: 2; color: $foreground; }
+#routing-mode { height: auto; color: $secondary; }
+.field-label { height: 1; margin-top: 1; color: $secondary; }
+#router-model, #executor-model, #next-tool { height: auto; color: $foreground; }
+#metrics {
+    height: 4;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid $rule;
+    color: $secondary;
+}
+
+#activity {
+    height: 1fr;
+    background: $background;
+    color: $secondary;
+    scrollbar-size: 1 1;
+    scrollbar-color: $boost;
+    scrollbar-background: $background;
+}
+
+/* A single prompt line anchors the conversation. */
+#composer { height: 5; padding: 0 2 1 2; background: $background; }
+#composer-label { height: 1; color: $secondary; }
 #input-row { height: 3; }
-#prompt { width: 1fr; border: tall #344660; background: #0b101b; }
-#prompt:focus { border: tall #65dcc5; }
-#run { width: 12; min-width: 10; margin-left: 1; background: #65dcc5; color: #0b101b; }
-#stop { width: 9; min-width: 8; margin-left: 1; }
-Footer { background: #0b101b; color: #8293ac; }
-.compact #sidebar { display: none; }
+#prompt {
+    width: 1fr;
+    height: 3;
+    padding: 0 1;
+    border: round $rule;
+    background: $surface;
+    color: $foreground;
+}
+
+#prompt:focus { border: round $primary; background-tint: transparent; }
+#prompt > .input--placeholder { color: $secondary; }
+#prompt > .input--cursor { color: $surface; background: $primary; }
+#prompt > .input--selection { background: $boost; }
+
+Button {
+    height: 3;
+    min-width: 8;
+    border: tall $panel;
+    background: $panel;
+    color: $primary;
+    text-style: bold;
+}
+
+Button:hover { background: $boost; border: tall $boost; }
+Button:focus { border: tall $primary; text-style: bold; }
+Button:disabled { color: $secondary; opacity: 50%; }
+#run { width: 10; margin-left: 1; color: $surface; background: $primary; border: tall $primary; }
+#run:hover, #run:focus { background: $accent; border: tall $accent; }
+#stop { width: 8; margin-left: 1; color: $error; }
+
+Footer {
+    height: 1;
+    padding: 0 2;
+    background: $background;
+    color: $secondary;
+}
+
+FooterKey, FooterLabel { background: $background; color: $secondary; }
+FooterKey > .footer-key--key { background: $background; color: $primary; text-style: bold; }
+FooterKey > .footer-key--description { background: $background; color: $secondary; }
+FooterKey:hover, FooterKey:hover > .footer-key--key { background: $panel; color: $primary; }
+
+/* Approvals use the same palette, with a clear keyboard focus. */
+ApprovalScreen { align: center middle; background: $foreground 35%; }
+#approval-dialog {
+    width: 88%;
+    max-width: 110;
+    height: 85%;
+    padding: 1 2;
+    border: round $primary;
+    background: $surface;
+    color: $foreground;
+}
+
+#approval-title { height: 2; color: $primary; text-style: bold; }
+#approval-preview {
+    height: 1fr;
+    margin: 1 0;
+    padding: 1;
+    border-top: solid $rule;
+    background: $background;
+    scrollbar-color: $boost;
+    scrollbar-background: $background;
+}
+
+#approval-content { height: auto; color: $foreground; }
+#approval-buttons { height: 3; align-horizontal: right; }
+#approval-buttons Button { margin-left: 1; }
+#approve { color: $surface; background: $primary; border: tall $primary; }
+#approve:hover, #approve:focus { background: $accent; border: tall $accent; }
+
+/* Preserve the prompt and transcript on smaller terminals. */
+Screen.compact #sidebar { display: none; }
 .compact #stack-label { display: none; }
+.compact #masthead, .compact #workspace-bar { padding-left: 1; padding-right: 1; }
 .compact #conversation { padding: 0 1; }
-.compact #composer { padding: 0 1; }
+.compact #composer { padding: 0 1 1 1; }
+.compact .welcome { padding: 0 1; }
+.compact .tool-card, .compact .plan-card { margin-left: 0; }
+.compact Footer { padding: 0 1; }

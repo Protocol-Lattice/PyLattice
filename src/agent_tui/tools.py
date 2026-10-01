@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import heapq
 import json
 import os
 import signal
@@ -21,7 +22,19 @@ from jsonschema.exceptions import ValidationError
 
 from .config import Settings
 
-SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".agent-tui", "dist"}
+SKIP_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".agent-tui",
+    "dist",
+    ".codebase-memory",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+}
 MAX_FILE_BYTES = 1_000_000
 
 
@@ -91,20 +104,24 @@ SPECS = [
     ),
     ToolSpec(
         "read_files",
-        "Read up to eight known files or line ranges in one step. Prefer this over separate "
-        "read_file calls when inspecting multiple files. Results share the output limit.",
+        "Read the whole repository recursively in one call with {} or path='.'. "
+        "Alternatively, supply files for known paths or line ranges. Available once per task; "
+        "reuse the result, then use read_file for changed or omitted content. "
+        "Protected files, symlinks and dependency/cache directories are excluded. "
+        "Results share the output limit and report truncation.",
         object_schema(
             {
+                "path": {**PATH, "description": "Directory to read recursively; defaults to '.'"},
                 "files": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 8,
+                    "maxItems": 10000,
                     "uniqueItems": True,
                     "items": READ_FILE_PARAMETERS,
                 },
             },
-            ["files"],
-        ),
+        )
+        | {"not": {"required": ["path", "files"]}},
     ),
     ToolSpec(
         "search_files",
@@ -335,7 +352,7 @@ class ToolRegistry:
             if name == "run_command":
                 output = await self._run_command(**arguments)
             elif name == "read_files":
-                return await self._read_files(arguments["files"])
+                return await self._read_files(**arguments)
             elif name in {"list_files", "read_file", "search_files"}:
                 output = await asyncio.to_thread(self._execute_file_tool, name, arguments)
             else:
@@ -353,23 +370,37 @@ class ToolRegistry:
             text = text[:limit] + "\n[output truncated; request a narrower range]"
         return ToolResult(result.ok, text)
 
-    async def _read_files(self, files: list[dict[str, Any]]) -> ToolResult:
-        semaphore = asyncio.Semaphore(4)
+    def _repository_files(self, path: str) -> list[dict[str, Any]]:
+        directory = self.resolve(path)
+        if not directory.is_dir():
+            raise ToolError("Expected a directory; use files for individual file paths")
+        return [
+            {"path": str(item.relative_to(self.root)), "end_line": MAX_FILE_BYTES}
+            for item in self._files(directory)
+        ]
+
+    async def _read_files(
+        self, files: list[dict[str, Any]] | None = None, path: str = "."
+    ) -> ToolResult:
+        if files is None:
+            files = await asyncio.to_thread(self._repository_files, path)
+        content_limit = self.settings.max_output_chars
 
         async def read(arguments: dict[str, Any]) -> dict[str, Any]:
             try:
-                async with semaphore:
-                    output = await asyncio.to_thread(
-                        self._execute_file_tool, "read_file", arguments
-                    )
+                output = await asyncio.to_thread(self._execute_file_tool, "read_file", arguments)
                 # Redact before any clipping so a shortened credential cannot leak a prefix.
-                return {
+                result = {
                     "ok": True,
                     **{
                         key: self.settings.redact(value) if isinstance(value, str) else value
                         for key, value in output.items()
                     },
                 }
+                if len(result["content"]) > content_limit:
+                    result["content"] = result["content"][:content_limit]
+                    result["truncated"] = result["has_more"] = True
+                return result
             except (ToolError, OSError, UnicodeError, ValueError) as exc:
                 return {
                     "path": self.settings.redact(arguments["path"]),
@@ -377,28 +408,89 @@ class ToolRegistry:
                     "error": self.settings.redact(str(exc))[:400],
                 }
 
-        # Preserve request order and report per-file failures without losing successful reads.
-        results = await asyncio.gather(*(read(arguments) for arguments in files))
+        # A fixed worker pool avoids creating a task for every file in a large repository.
+        pending = iter(enumerate(files))
+        results: list[dict[str, Any]] = [{} for _ in files]
+        content_sizes: list[tuple[int, int]] = []
+        retained_chars = 0
+
+        async def worker() -> None:
+            nonlocal retained_chars
+            for index, arguments in pending:
+                results[index] = await read(arguments)
+                size = len(results[index].get("content", ""))
+                if size:
+                    heapq.heappush(content_sizes, (-size, index))
+                    retained_chars += size
+                # Keep retained content bounded without truncating files whose combined
+                # content fits. Shrink the largest entries first to share the budget.
+                while retained_chars > content_limit:
+                    negative_size, largest_index = heapq.heappop(content_sizes)
+                    size = -negative_size
+                    kept = max(size // 2, size - (retained_chars - content_limit))
+                    largest = results[largest_index]
+                    largest["content"] = largest["content"][:kept]
+                    largest["truncated"] = largest["has_more"] = True
+                    retained_chars -= size - kept
+                    if kept:
+                        heapq.heappush(content_sizes, (-kept, largest_index))
+
+        await asyncio.gather(*(worker() for _ in range(min(4, len(files)))))
+        total_files = len(results)
+        failed_files = sum(not result["ok"] for result in results)
+        truncated = any(result.get("has_more", False) for result in results)
 
         def serialize() -> str:
-            return self.settings.redact(json.dumps({"files": results}, ensure_ascii=False))
+            return self.settings.redact(
+                json.dumps(
+                    {
+                        "files": results,
+                        "total_files": total_files,
+                        "failed_files": failed_files,
+                        "omitted_files": total_files - len(results),
+                        "truncated": truncated or len(results) < total_files,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        # If even metadata cannot fit, retain a bounded prefix and report exactly how many
+        # entries were omitted. Every discovered file has still been read once above.
+        full_results = results
+        results = [
+            {**result, "content": "", "truncated": True, "has_more": True}
+            if result.get("content")
+            else result
+            for result in full_results
+        ]
+        metadata_fits = len(serialize()) <= self.settings.max_output_chars
+        results = full_results
+        if not metadata_fits:
+            low, high = 0, len(results)
+            while low < high:
+                mid = (low + high + 1) // 2
+                results = full_results[:mid]
+                if len(serialize()) <= self.settings.max_output_chars:
+                    low = mid
+                else:
+                    high = mid - 1
+            results = full_results[:low]
 
         text = serialize()
         while len(text) > self.settings.max_output_chars:
             candidates = [result for result in results if result.get("content")]
             if not candidates:
                 return self.sanitize(
-                    ToolResult(
-                        False, "Batch metadata exceeds the output limit; request fewer files."
-                    )
+                    ToolResult(False, "Repository summary exceeds the output limit; increase it.")
                 )
             # Keep every file's metadata and valid JSON instead of clipping the last files away.
             largest = max(candidates, key=lambda result: len(result["content"]))
             largest["content"] = largest["content"][: len(largest["content"]) // 2]
             largest["truncated"] = True
             largest["has_more"] = True
+            truncated = True
             text = serialize()
-        return ToolResult(all(result["ok"] for result in results), text)
+        return ToolResult(failed_files == 0, text)
 
     def _execute_file_tool(self, name: str, args: dict[str, Any]) -> Any:
         if name == "finish":

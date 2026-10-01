@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
@@ -22,7 +23,14 @@ async def test_offline_demo_completes_planning_mcts_and_narrow_layout(settings):
         assert any(role == "PLAN" for role, _ in app.transcript)
         assert any(role == "MCTS" for role, _ in app.transcript)
         assert "Completed" in str(app.query_one("#phase", Static).render())
+        assert not app.query_one("#sidebar").display
+        await pilot.press("ctrl+o")
+        assert app.query_one("#sidebar").display
         await pilot.resize_terminal(80, 24)
+        assert not app.query_one("#sidebar").display
+        await pilot.resize_terminal(120, 42)
+        assert app.query_one("#sidebar").display
+        await pilot.press("ctrl+o")
         assert not app.query_one("#sidebar").display
         await pilot.press("ctrl+n")
         assert not app.agent.history
@@ -164,3 +172,78 @@ async def test_plugin_install_before_first_task_initializes_metrics_and_can_canc
         await app.workers.wait_for_complete()
         assert not app._busy
         assert not app.query_one("#prompt", Input).disabled
+
+
+async def test_subagent_events_keep_parent_progress_and_stream_separate(settings):
+    app = AgentApp(settings)
+    async with app.run_test():
+        app._step = 7
+        app._stream_text = "Parent response"
+
+        async def child_event(kind, text="", details=None):
+            await app._event(
+                AgentEvent(
+                    "subagent",
+                    text,
+                    1,
+                    {
+                        "id": "subagent-1",
+                        "name": "reviewer",
+                        "event": kind,
+                        "details": details or {},
+                    },
+                )
+            )
+
+        await child_event("start", "Review the source")
+        await child_event("tool_start", "read_file")
+        await child_event("usage", details={"tokens": 12})
+        await child_event("done", "Found the problem", {"status": "completed"})
+        assert app._step == 7 and app._stream_text == "Parent response"
+        assert app._calls == 1 and app._tokens == 12
+        assert not app._tool_cards
+        assert "completed" in app._subagent_cards["subagent-1"][0].title
+        assert "Completed" not in str(app.query_one("#phase", Static).render())
+        assert app.transcript[-1] == ("SUBAGENT reviewer / completed", "Found the problem")
+        await app.action_new_chat()
+        assert not app._subagent_cards
+
+
+async def test_delegated_write_uses_approval_modal_and_renders_result(settings, tmp_path):
+    class Router:
+        def __init__(self, first):
+            self.first = first
+
+        async def route(self, state, tools):
+            return RouteDecision(tool=self.first if not state.last_action else "finish")
+
+    class Executor:
+        async def complete(self, messages, schemas, selected, on_token):
+            if selected == "delegate_tasks":
+                args = {"tasks": [{"name": "writer", "prompt": "Own delegated.py; create it"}]}
+            elif selected == "write_file":
+                args = {"path": "delegated.py", "content": "source"}
+            else:
+                args = {"summary": "Reviewed the denied action"}
+            return Completion(calls=[ToolCall("call", selected, json.dumps(args))])
+
+    def factory():
+        return Agent(settings, Router("write_file"), Executor(), allow_delegation=False)
+
+    agent = Agent(settings, Router("delegate_tasks"), Executor(), subagent_factory=factory)
+    app = AgentApp(settings, agent=agent)
+    async with app.run_test(size=(120, 42)) as pilot:
+        await app.submit_goal("Delegate the file creation")
+        for _ in range(100):
+            if isinstance(app.screen, ApprovalScreen):
+                break
+            await pilot.pause(0.01)
+        assert isinstance(app.screen, ApprovalScreen)
+        await pilot.pause()
+        await pilot.click("#deny")
+        await app.workers.wait_for_complete()
+        assert not (tmp_path / "delegated.py").exists()
+        assert not app._busy
+        assert any(role == "SUBAGENT writer / completed" for role, _ in app.transcript)
+        assert len(app._subagent_cards) == 1
+        assert "Completed" in str(app.query_one("#phase", Static).render())

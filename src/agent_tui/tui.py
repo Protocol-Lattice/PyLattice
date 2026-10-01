@@ -14,6 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import Button, Collapsible, Footer, Input, Label, Markdown, RichLog, Static
 from textual.worker import Worker
 
@@ -44,16 +45,6 @@ class ApprovalScreen(ModalScreen[bool]):
         Binding("ctrl+y", "approve", "Approve once"),
         Binding("ctrl+x", "app.stop", "Stop run"),
     ]
-    DEFAULT_CSS = """
-    ApprovalScreen { align: center middle; background: #050812 80%; }
-    #approval-dialog { width: 88%; max-width: 110; height: 85%; border: round #e9b86b;
-        background: #121a29; padding: 1 2; }
-    #approval-title { color: #e9b86b; text-style: bold; height: 2; }
-    #approval-preview { height: 1fr; border-top: solid #2c3b52; margin: 1 0; padding: 1; }
-    #approval-content { height: auto; }
-    #approval-buttons { height: 3; align-horizontal: right; }
-    #approval-buttons Button { margin-left: 1; }
-    """
 
     def __init__(self, tool: str, preview: str) -> None:
         super().__init__()
@@ -91,12 +82,31 @@ class AgentApp(App):
         Binding("ctrl+n", "new_chat", "New chat"),
         Binding("ctrl+s", "save", "Save transcript"),
         Binding("ctrl+l", "focus_prompt", "Focus prompt"),
+        Binding("ctrl+o", "toggle_activity", "Activity"),
     ]
 
     def __init__(
         self, settings: Settings, initial_prompt: str | None = None, agent: Agent | None = None
     ) -> None:
         super().__init__()
+        self.register_theme(
+            Theme(
+                name="jev-pink",
+                primary="#8e3e60",
+                secondary="#785767",
+                accent="#a32f60",
+                foreground="#35272f",
+                background="#f6dbe4",
+                surface="#f9e7ee",
+                panel="#efd0dd",
+                boost="#d398af",
+                success="#35624d",
+                warning="#805410",
+                error="#a32948",
+                dark=False,
+            )
+        )
+        self.theme = "jev-pink"
         self.settings = settings
         self.initial_prompt = initial_prompt
         if agent:
@@ -123,11 +133,12 @@ class AgentApp(App):
         self._stream_rendered = ""
         self._stream_updated = 0.0
         self._tool_cards: dict[int, tuple[Collapsible, Static, str]] = {}
+        self._subagent_cards: dict[str, tuple[Collapsible, Static, str]] = {}
         self.transcript: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="masthead"):
-            yield Static("◈  AGENT TUI", id="brand")
+            yield Static("✦  Agent TUI", id="brand")
             mode = "OFFLINE DEMO" if self.settings.demo else "HARNESS ROUTER × OPENROUTER"
             yield Static(mode, id="stack-label")
         with Horizontal(id="workspace-bar"):
@@ -148,7 +159,7 @@ class AgentApp(App):
                     "Describe a task to inspect files, make changes, or run a check. "
                     "Follow each tool decision in the activity panel.\n\n"
                     "Try **“Explain this project”** or **“Find and fix the failing tests.”**\n\n"
-                    "`/help` commands · `Esc` stop · `Ctrl+N` new chat",
+                    "`/help` commands · `Ctrl+O` activity · `Esc` stop",
                     flavor="welcome",
                 )
             with Vertical(id="sidebar"):
@@ -205,6 +216,9 @@ class AgentApp(App):
     def on_resize(self, event: events.Resize) -> None:
         self.screen.set_class(event.size.width < 100, "compact")
 
+    def action_toggle_activity(self) -> None:
+        self.screen.toggle_class("show-activity")
+
     @on(Input.Submitted, "#prompt")
     async def on_prompt(self, event: Input.Submitted) -> None:
         await self.submit_goal(event.value)
@@ -256,6 +270,7 @@ class AgentApp(App):
         self._step = 0
         self._started = monotonic()
         self._tool_cards.clear()
+        self._subagent_cards.clear()
         self._stream_card = None
         self._stream_text = ""
         self._stream_rendered = ""
@@ -291,8 +306,9 @@ class AgentApp(App):
     def _scroll(self) -> None:
         self.query_one("#conversation", VerticalScroll).scroll_end(animate=False)
 
-    def _log(self, text: str, color: str = "#91a3bc") -> None:
+    def _log(self, text: str, tone: str = "secondary") -> None:
         now = datetime.now().strftime("%H:%M:%S")
+        color = getattr(self.current_theme, tone, None) or self.current_theme.foreground
         self.query_one("#activity", RichLog).write(
             Text(f"{now}  {self.settings.redact(text)}", style=color)
         )
@@ -317,6 +333,9 @@ class AgentApp(App):
         self._scroll()
 
     async def _event(self, event: AgentEvent) -> None:
+        if event.kind == "subagent":
+            await self._subagent_event(event)
+            return
         if event.kind == "token":
             # Parsing Markdown for every token blocks the executor's network stream.
             self._stream_text += event.text
@@ -343,7 +362,7 @@ class AgentApp(App):
             )
             await self.query_one("#conversation", VerticalScroll).mount(card)
             self.transcript.append(("PLAN", text))
-            self._log(event.text, "#b8aafa")
+            self._log(event.text, "accent")
             self._scroll()
         elif event.kind == "mcts":
             visits = ", ".join(f"{tool}: {count}" for tool, count in event.data["visits"].items())
@@ -361,7 +380,7 @@ class AgentApp(App):
             )
             await self.query_one("#conversation", VerticalScroll).mount(card)
             self.transcript.append(("MCTS", text))
-            self._log(f"MCTS · {event.data['simulations']} simulations", "#b8aafa")
+            self._log(f"MCTS · {event.data['simulations']} simulations", "accent")
         elif event.kind == "routing":
             await self._flush_stream(force=True)
             phase.update("● Routing")
@@ -371,11 +390,11 @@ class AgentApp(App):
         elif event.kind == "route":
             if event.data["fallback"]:
                 detail = f"Fallback · {event.data['reason']}"
-                self._log(detail, "#e9b86b")
+                self._log(detail, "warning")
             else:
                 label = "visit share" if event.data.get("mode") == "mcts" else "confidence"
                 detail = f"{event.text}  ·  {event.data['confidence']:.0%} {label}"
-                self._log(detail, "#65dcc5")
+                self._log(detail, "success")
             self.query_one("#next-tool", Static).update(detail)
         elif event.kind == "generating":
             phase.update("● Generating")
@@ -401,7 +420,7 @@ class AgentApp(App):
             self._scroll()
         elif event.kind == "approval":
             phase.update("● Awaiting approval")
-            self._log(f"Review {event.text}", "#e9b86b")
+            self._log(f"Review {event.text}", "warning")
         elif event.kind == "tool_result":
             status = "done" if event.data["ok"] else "error"
             if event.step in self._tool_cards:
@@ -410,25 +429,61 @@ class AgentApp(App):
                 body.update(f"ARGUMENTS\n{arguments}\n\nRESULT\n{event.text}")
             self.transcript.append((f"TOOL {event.data['tool']}", event.text))
             self._log(
-                f"{event.data['tool']} · {status}", "#65dcc5" if event.data["ok"] else "#fa8c96"
+                f"{event.data['tool']} · {status}", "success" if event.data["ok"] else "error"
             )
         elif event.kind == "warning":
-            self._log(event.text, "#e9b86b")
+            self._log(event.text, "warning")
         elif event.kind == "context":
             self._log(f"Context {event.data['chars']:,}/{event.data['budget']:,} chars")
         elif event.kind == "extension":
-            self._log(event.text, "#b8aafa")
+            self._log(event.text, "accent")
         elif event.kind == "done":
             await self._flush_stream(force=True)
             status = event.data["status"]
             phase.update(f"● {status.capitalize()}")
-            self._log(status.capitalize(), "#65dcc5" if status == "completed" else "#e9b86b")
+            self._log(status.capitalize(), "success" if status == "completed" else "warning")
             if not self._stream_card or event.text != self._stream_text:
                 await self._message(
                     "ASSISTANT" if status == "completed" else status.upper(),
                     event.text,
                     "assistant" if status == "completed" else "notice",
                 )
+        self._update_elapsed()
+
+    async def _subagent_event(self, event: AgentEvent) -> None:
+        identifier, name = event.data["id"], event.data["name"]
+        kind = event.data["event"]
+        details = event.data.get("details", {})
+        phase = self.query_one("#phase", Static)
+        if kind == "start":
+            phase.update("● Delegating")
+            body = Static(event.text, markup=False, classes="tool-content")
+            card = Collapsible(
+                body, title=f"SUBAGENT  /  {name}  ·  running", collapsed=True, classes="tool-card"
+            )
+            await self.query_one("#conversation", VerticalScroll).mount(card)
+            self._subagent_cards[identifier] = (card, body, event.text)
+            self._log(f"Subagent {name} started", "accent")
+            self._scroll()
+        elif kind == "usage":
+            self._tokens += details.get("tokens", 0)
+        elif kind == "tool_start":
+            self._calls += 1
+            phase.update("● Delegating")
+            self._log(f"{name} · calling {event.text}")
+        elif kind == "approval":
+            phase.update("● Awaiting approval")
+            self._log(f"{name} · review {event.text}", "warning")
+        elif kind in {"warning", "extension"}:
+            self._log(f"{name} · {event.text}", "warning")
+        elif kind == "done":
+            status = details["status"]
+            if identifier in self._subagent_cards:
+                card, body, prompt = self._subagent_cards[identifier]
+                card.title = f"SUBAGENT  /  {name}  ·  {status}"
+                body.update(f"TASK\n{prompt}\n\nRESULT\n{event.text}")
+            self.transcript.append((f"SUBAGENT {name} / {status}", event.text))
+            self._log(f"{name} · {status}", "success" if status == "completed" else "warning")
         self._update_elapsed()
 
     async def _command(self, command: str) -> None:
@@ -601,6 +656,7 @@ class AgentApp(App):
             return
         self.agent.clear()
         self.transcript.clear()
+        self._subagent_cards.clear()
         await self.query_one("#conversation", VerticalScroll).remove_children()
         self.query_one("#activity", RichLog).clear()
         self.query_one("#phase", Static).update("● Idle")
@@ -635,10 +691,7 @@ class AgentApp(App):
     async def _close_clients(self) -> None:
         if not self._closed:
             self._closed = True
-            for component in (self.agent.router, self.agent.executor):
-                close = getattr(component, "aclose", None)
-                if close:
-                    await close()
+            await self.agent.aclose()
 
     async def action_quit(self) -> None:
         self.action_stop()

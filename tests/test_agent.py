@@ -16,9 +16,11 @@ class FakeRouter:
     def __init__(self, *decisions):
         self.decisions = iter(decisions)
         self.states = []
+        self.catalogs = []
 
     async def route(self, state, tools):
         self.states.append(copy.deepcopy(state))
+        self.catalogs.append([tool.name for tool in tools])
         return next(self.decisions)
 
 
@@ -92,6 +94,7 @@ async def test_fallback_exposes_full_catalog(settings):
         "edit_file",
         "run_command",
         "finish",
+        "delegate_tasks",
         "skill_load",
         "skill_search",
         "skill_read",
@@ -142,6 +145,88 @@ async def test_multiple_files_are_read_in_one_agent_step(settings, tmp_path):
     output = json.loads(json.loads(executor.requests[1][0][-1]["content"])["output"])
     assert [file["path"] for file in output["files"]] == ["one.py", "two.py", "three.py"]
     assert all(file["ok"] for file in output["files"])
+
+
+async def test_whole_repository_is_read_in_one_agent_step(settings, tmp_path):
+    (tmp_path / "src").mkdir()
+    paths = [f"src/file-{i:02}.py" for i in range(12)] + ["README.md"]
+    for name in paths:
+        (tmp_path / name).write_text(f"Contents of {name}")
+    router = FakeRouter(RouteDecision(tool="read_files"), RouteDecision(tool="finish"))
+    executor = FakeExecutor(
+        call("read_files", {}), call("finish", {"summary": "Repository inspected"})
+    )
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await Agent(settings, router, executor).run("Read the repository", emit, deny)
+    assert result.status == "completed" and result.steps == 2
+    assert [event.text for event in events if event.kind == "tool_start"] == [
+        "read_files",
+        "finish",
+    ]
+    output = json.loads(json.loads(executor.requests[1][0][-1]["content"])["output"])
+    assert {file["path"] for file in output["files"]} == set(paths)
+    assert not output["truncated"]
+    assert "read_files" in router.catalogs[0]
+    assert "read_files" not in router.catalogs[1]
+
+
+@pytest.mark.parametrize("first_arguments", [{}, {"path": "missing"}])
+async def test_read_files_executes_at_most_once_even_with_different_arguments(
+    settings, tmp_path, first_arguments
+):
+    (tmp_path / "file.py").write_text("source")
+    router = FakeRouter(
+        RouteDecision(tool="read_files"),
+        RouteDecision(tool="read_files"),
+        RouteDecision(tool="read_file"),
+        RouteDecision(tool="finish"),
+    )
+    executor = FakeExecutor(
+        call("read_files", first_arguments),
+        call("read_files", {"files": [{"path": "file.py"}]}),
+        call("read_file", {"path": "file.py"}),
+        call("finish", {"summary": "Inspected"}),
+    )
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await Agent(settings, router, executor).run("Inspect repository", emit, deny)
+    assert result.status == "completed"
+    assert [event.text for event in events if event.kind == "tool_start"] == [
+        "read_files",
+        "read_file",
+        "finish",
+    ]
+    _, schemas, selected = executor.requests[1]
+    assert selected is None
+    assert "read_files" not in {schema["function"]["name"] for schema in schemas}
+    assert "read_files already executed this task" in executor.requests[2][0][-1]["content"]
+    assert "1: source" in executor.requests[3][0][-1]["content"]
+
+
+async def test_repository_read_is_available_again_on_next_task(settings, tmp_path):
+    file = tmp_path / "file.py"
+    file.write_text("before")
+    router = FakeRouter(*[RouteDecision(tool=name) for name in ["read_files", "finish"] * 2])
+    executor = FakeExecutor(
+        call("read_files", {}),
+        call("finish", {"summary": "Inspected before"}),
+        call("read_files", {}),
+        call("finish", {"summary": "Inspected after"}),
+    )
+    agent = Agent(settings, router, executor)
+    assert (await agent.run("Read repository", ignore, deny)).status == "completed"
+    file.write_text("after")
+    assert (await agent.run("Read it again", ignore, deny)).status == "completed"
+    assert "1: before" in executor.requests[1][0][-1]["content"]
+    assert "1: after" in executor.requests[3][0][-1]["content"]
+    assert "read_files" in router.catalogs[2]
 
 
 async def test_agent_omits_previous_task_skill_instructions_after_topic_change(settings):

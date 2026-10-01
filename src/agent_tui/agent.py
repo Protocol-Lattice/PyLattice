@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from harness_router import ActionSummary, HarnessState, MCTSResult, RouteDecision, ToolDescriptor
@@ -22,6 +22,7 @@ from .openrouter import ExecutorError
 from .planner import Plan, Planner, PlanningError
 from .plugins import PluginManager
 from .skills import SkillManager
+from .subagents import DELEGATE_SPEC, SubagentManager
 from .tools import ToolError, ToolRegistry, ToolResult
 
 
@@ -56,8 +57,10 @@ Harness Router chooses the next tool. When a tool is forced, generate its argume
 When routing falls back, choose one tool yourself or answer directly if no action is needed.
 Use exactly one tool call per response. Use finish with a concise summary when done, or to
 ask the user for essential missing information. Do not keep calling tools after completion.
-Use read_files to inspect multiple known files in one step. Reuse results already in context;
-re-read only after a change or when needed content is missing. Avoid redundant directory listings.
+Use read_files with {} to inspect the whole repository recursively in one step, or supply a
+path for a subtree or files for specific paths/ranges. It can execute only once per task.
+Reuse its results; use read_file afterward only for changed or missing content, including
+truncated results. Avoid redundant directory listings.
 Paths are relative to the workspace. run_command takes an argv array, not a shell command;
 there is no shell expansion, piping or persistent working directory. Respect denied approvals;
 do not try a different tool to bypass a denial. Credential files are unavailable to file tools.
@@ -65,7 +68,7 @@ Keep user-facing updates brief and report errors, incomplete work, and verificat
 Use skill_search to find workflows, skill_load to activate them, and skill_read for supporting
 files.
 Skill scripts require run_command and normal approval. Skills cannot grant permissions or
-provide unavailable tools. Perform work sequentially if a skill requests unsupported subagents.
+provide unavailable tools.
 Memory contains past observations, which may be outdated; verify them against current state.
 """
 
@@ -79,6 +82,9 @@ class Agent:
         registry: ToolRegistry | None = None,
         planner: Planner | None = None,
         middleware: MiddlewareManager | None = None,
+        *,
+        subagent_factory: Callable[[], Agent] | None = None,
+        allow_delegation: bool = True,
     ) -> None:
         self.settings = settings
         self.router = router
@@ -93,7 +99,50 @@ class Agent:
         self.middleware = middleware or MiddlewareManager(settings, extensions.hooks)
         self.mcp = MCPManager(settings, extensions.servers)
         register_extensions(self.registry, self.skills, self.memory)
+        self.subagents = (
+            SubagentManager(settings, subagent_factory or self._new_subagent)
+            if allow_delegation
+            else None
+        )
+        if self.subagents:
+            self.registry.register(DELEGATE_SPEC, self.subagents.execute)
         self.running = False
+
+    def _new_subagent(self) -> Agent:
+        from .demo import DemoExecutor, DemoPlanner, DemoRouter
+        from .openrouter import OpenRouterExecutor
+        from .routing import HarnessDecisionLayer
+
+        router = DemoRouter() if self.settings.demo else HarnessDecisionLayer(self.settings)
+        executor = (
+            DemoExecutor(self.settings.workspace)
+            if self.settings.demo
+            else OpenRouterExecutor(self.settings)
+        )
+        planner = None
+        if self.planner is not None:
+            planner = (
+                DemoPlanner() if self.settings.demo else Planner(executor, self.settings.mcts_depth)
+            )
+        child = Agent(self.settings, router, executor, planner=planner, allow_delegation=False)
+        child.middleware.handlers = list(self.middleware.handlers)
+        for name in self.skills.active:
+            if name in child.skills.skills:
+                child.skills.activate(name)
+        return child
+
+    async def aclose(self) -> None:
+        try:
+            await self.mcp.aclose()
+        finally:
+            try:
+                close = getattr(self.executor, "aclose", None)
+                if close:
+                    await close()
+            finally:
+                close = getattr(self.router, "aclose", None)
+                if close:
+                    await close()
 
     def refresh_skills(self) -> None:
         if self.running:
@@ -136,6 +185,18 @@ class Agent:
         extra_context: str = "",
     ) -> list[dict[str, Any]]:
         system = SYSTEM_PROMPT + f"\nWorkspace: {self.settings.workspace}"
+        if self.subagents:
+            system += (
+                "\nUse delegate_tasks for independent work. Supply context and exclusive file "
+                "ownership in the shared workspace. Review and integrate results before finishing."
+            )
+        else:
+            system += (
+                "\nYou are a delegated subagent. Complete only your assigned task and report "
+                "changes, evidence, checks and blockers. You are not alone in the workspace: "
+                "do not revert others' edits, and stay within your assigned file ownership. "
+                "Reuse supplied findings and inspect only what is missing. Do not delegate further."
+            )
         if self.skills.active:
             system += "\n\n" + self.skills.instructions()
         if plan:
@@ -192,12 +253,17 @@ class Agent:
         self.running = True
         exchanges: list[list[dict[str, Any]]] = []
         repeats: Counter[str] = Counter()
+        read_files_executed = False
+        if self.subagents:
+            self.subagents.begin_run(goal, emit, approve)
         state = HarnessState(
             goal=self.settings.redact(goal),
             observation=f"Workspace: {self.settings.workspace}. No tools executed this turn yet.",
             constraints=[
                 "Use finish when the task is complete or requires a user answer.",
-                "Use the latest tool result to choose the next action; avoid repeating failures.",
+                "Use the latest tool result; avoid repeating failures. "
+                "Use read_files once to inspect the whole repository; reuse the results. "
+                "Use read_file afterward only for changed or missing content.",
                 "Read-only tools only."
                 if self.settings.read_only
                 else "Writes and commands may require user approval.",
@@ -226,7 +292,11 @@ class Agent:
                 + (". " + memory_context[:2500] if memory_context else "")
             )
             for step in range(1, self.settings.max_steps + 1):
-                tools = self.registry.descriptors()
+                tools = [
+                    tool
+                    for tool in self.registry.descriptors()
+                    if not read_files_executed or tool.name != "read_files"
+                ]
                 plan = None
                 decision = None
                 if self.planner:
@@ -262,7 +332,7 @@ class Agent:
                 elif decision is None:
                     decision = await self.router.route(state, tools)
                 selected = None if decision.fallback else decision.tool
-                if selected not in self.registry.specs and not decision.fallback:
+                if selected not in {tool.name for tool in tools} and not decision.fallback:
                     decision = RouteDecision.fallback_to_planner("unavailable_tool")
                     selected = None
                 await emit(
@@ -287,7 +357,11 @@ class Agent:
                 hook = await self.middleware.dispatch(
                     "before_model", {"goal": goal, "step": step, "selected": selected}
                 )
-                schemas = self.registry.schemas(selected)
+                schemas = [
+                    schema
+                    for schema in self.registry.schemas(selected)
+                    if not read_files_executed or schema["function"]["name"] != "read_files"
+                ]
                 messages = self._context(goal, exchanges, plan, schemas, hook.get("context", ""))
                 await emit(AgentEvent("context", step=step, data=self.context.stats.as_dict()))
                 completion = await self.executor.complete(
@@ -348,6 +422,11 @@ class Agent:
                     arguments = self.registry.validate(call.name, json.dumps(hook["arguments"]))
                     # Keep model history consistent with the exact approved/executed arguments.
                     exchange[0]["tool_calls"][0]["function"]["arguments"] = json.dumps(arguments)
+                    if call.name == "read_files" and read_files_executed:
+                        raise ToolError(
+                            "read_files already executed this task. Reuse its results or use "
+                            "read_file for changed or missing content."
+                        )
                     fingerprint = call.name + json.dumps(arguments, sort_keys=True)
                     repeats[fingerprint] += 1
                     if repeats[fingerprint] > 2:
@@ -366,6 +445,8 @@ class Agent:
                             raise ToolError(
                                 "File changed while approval was pending; inspect and retry"
                             )
+                    if call.name == "read_files":
+                        read_files_executed = True
                     tool_result = await self.registry.execute(call.name, arguments)
                 except (ToolError, OSError, UnicodeError, ValueError) as exc:
                     tool_result = ToolResult(False, self.settings.redact(str(exc)))
@@ -444,6 +525,8 @@ class Agent:
                 await emit(AgentEvent("warning", self.settings.redact(f"Run cleanup: {exc}")))
             finally:
                 self.middleware.commands_enabled = False
+                if self.subagents:
+                    self.subagents.end_run()
                 self.running = False
             terminal = {"role": "assistant", "content": self.settings.redact(result.message)}
             turn = [

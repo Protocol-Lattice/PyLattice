@@ -21,6 +21,7 @@ async def test_protected_paths_cannot_be_read_or_written(settings, path):
     for name, args in [
         ("read_file", {"path": path}),
         ("read_files", {"files": [{"path": path}]}),
+        ("read_files", {"path": path}),
         ("write_file", {"path": path, "content": "changed"}),
     ]:
         result = await tools.execute(name, args)
@@ -34,6 +35,7 @@ async def test_symlink_escape_and_aliases_are_rejected(settings, tmp_path):
     tools = ToolRegistry(settings)
     assert not (await tools.execute("read_file", {"path": "link"})).ok
     assert not (await tools.execute("read_files", {"files": [{"path": "link"}]})).ok
+    assert not (await tools.execute("read_files", {"path": "link"})).ok
     assert not (await tools.execute("write_file", {"path": "link", "content": "changed"})).ok
     assert outside.read_text() == "secret"
     listing = json.loads((await tools.execute("list_files", {})).content)
@@ -104,7 +106,9 @@ async def test_ambiguous_edit_is_rejected(settings, tmp_path):
         ("run_command", {"argv": []}),
         ("read_file", {"path": "x", "start_line": True}),
         ("read_files", {"files": []}),
-        ("read_files", {"files": [{"path": str(i)} for i in range(9)]}),
+        ("read_files", {"path": ".", "files": [{"path": "x"}]}),
+        ("read_files", {"path": 12}),
+        ("read_files", {"unknown": True}),
         ("read_files", {"files": [{"path": "x"}, {"path": "x"}]}),
         ("read_files", {"files": [{"path": 12}]}),
         ("finish", {"summary": ""}),
@@ -266,9 +270,115 @@ async def test_batch_reads_run_concurrently_with_bounded_workers(settings, monke
                 active -= 1
 
     monkeypatch.setattr(tools, "_execute_file_tool", read)
-    result = await tools.execute("read_files", {"files": [{"path": str(i)} for i in range(8)]})
+    result = await tools.execute("read_files", {"files": [{"path": str(i)} for i in range(16)]})
     assert result.ok
     assert maximum == 4
     assert [file["path"] for file in json.loads(result.content)["files"]] == list(
-        map(str, range(8))
+        map(str, range(16))
     )
+
+
+@pytest.mark.parametrize("arguments", [{}, {"path": "."}])
+async def test_repository_read_visits_all_files_once(
+    readonly_settings, tmp_path, monkeypatch, arguments
+):
+    paths = [f"src/nested/file-{i:02}.py" for i in range(12)] + ["README.md", ".env.example"]
+    for name in paths:
+        file = tmp_path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("line\n" * 300 if name == "README.md" else f"Contents of {name}")
+    for name in (
+        ".env",
+        "cert.key",
+        ".git/config",
+        "node_modules/dep.js",
+        ".venv/dep.py",
+        ".pytest_cache/data",
+        ".ruff_cache/data",
+        ".codebase-memory/graph",
+    ):
+        file = tmp_path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("excluded")
+    (tmp_path / "alias.py").symlink_to(tmp_path / paths[0])
+    (tmp_path / "alias-dir").symlink_to(tmp_path / "src", target_is_directory=True)
+    tools = ToolRegistry(readonly_settings)
+    read_paths = []
+    original = tools._read_text
+
+    def read(path):
+        read_paths.append(str(path.relative_to(tmp_path)))
+        return original(path)
+
+    monkeypatch.setattr(tools, "_read_text", read)
+    result = await tools.execute("read_files", arguments)
+    assert result.ok
+    output = json.loads(result.content)
+    assert sorted(read_paths) == sorted(paths)
+    assert output["total_files"] == len(paths)
+    assert output["failed_files"] == output["omitted_files"] == 0
+    assert not output["truncated"]
+    files = {file["path"]: file for file in output["files"]}
+    assert set(files) == set(paths)
+    assert files["README.md"]["content"].endswith("300: line")
+    assert all(file["ok"] and not file["has_more"] for file in files.values())
+
+
+async def test_repository_read_subtree_and_empty_directory(settings, tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/file.py").write_text("source")
+    (tmp_path / "outside.py").write_text("not selected")
+    (tmp_path / "empty").mkdir()
+    tools = ToolRegistry(settings)
+    result = await tools.execute("read_files", {"path": "src"})
+    assert result.ok
+    assert [file["path"] for file in json.loads(result.content)["files"]] == ["src/file.py"]
+    result = await tools.execute("read_files", {"path": "empty"})
+    assert result.ok
+    output = json.loads(result.content)
+    assert output["files"] == [] and output["total_files"] == 0
+    assert not output["truncated"]
+    for path in ("missing", "outside.py"):
+        assert not (await tools.execute("read_files", {"path": path})).ok
+
+
+async def test_repository_read_reports_unsupported_files(settings, tmp_path):
+    (tmp_path / "valid.py").write_text("source")
+    (tmp_path / "binary").write_bytes(b"a\0b")
+    (tmp_path / "large").write_bytes(b"x" * 1_000_001)
+    result = await ToolRegistry(settings).execute("read_files", {})
+    assert not result.ok
+    output = json.loads(result.content)
+    assert output["total_files"] == 3 and output["failed_files"] == 2
+    files = {file["path"]: file for file in output["files"]}
+    assert files["valid.py"]["content"] == "1: source"
+    assert "Binary" in files["binary"]["error"]
+    assert "1 MB" in files["large"]["error"]
+
+
+async def test_repository_read_bounds_metadata_without_skipping_reads(
+    settings, tmp_path, monkeypatch
+):
+    paths = [f"file-{i:03}-{'x' * 80}" for i in range(50)]
+    for name in paths:
+        (tmp_path / name).write_text("source " + settings.api_key)
+    (tmp_path / paths[-1]).write_bytes(b"\0")
+    tools = ToolRegistry(replace(settings, max_output_chars=1200))
+    read_paths = []
+    original = tools._read_text
+
+    def read(path):
+        read_paths.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(tools, "_read_text", read)
+    result = await tools.execute("read_files", {})
+    assert not result.ok  # The failed file is accounted for even if its entry is omitted.
+    assert len(result.content) <= 1200
+    assert settings.api_key not in result.content
+    output = json.loads(result.content)
+    assert sorted(read_paths) == paths
+    assert 0 < len(output["files"]) < len(paths)
+    assert output["total_files"] == len(paths)
+    assert output["omitted_files"] == len(paths) - len(output["files"])
+    assert output["failed_files"] == 1 and output["truncated"]

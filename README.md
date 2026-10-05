@@ -154,3 +154,32 @@ async def mod(event, payload, next):
 
 Mods execute in-process with the same OS permissions as PyLattice. They are not sandboxed.
 Only install or enable mods from code you trust.
+
+
+## Fast execution path
+
+PyLattice avoids model calls when the next operation and its arguments are already
+unambiguous.
+
+Examples that can execute through the zero-LLM path:
+
+```text
+Read README.md
+list files
+find "ExecutorError"
+run tests
+```
+
+The fast path still goes through normal validation, mods, hooks, permission checks, tool
+execution, history, and observation handling; it only skips unnecessary routing/model calls.
+
+Direct `jev` routing no longer starts the planner in parallel. The planner is reserved for
+`mcts`, where its predicted paths are actually used.
+
+After a successful Python `edit_file` or `write_file`, PyLattice looks for a matching
+`tests/test_<module>.py`. When found, that focused test is scheduled as a deterministic
+next action, avoiding another router + executor round trip.
+
+JEV decisions also have a small exact-state LRU cache. Its key includes the compact harness
+state and tool catalog, including the current observation, so a tool result invalidates the
+previous routing decision instead of reusing stale state.

@@ -14,6 +14,7 @@ from .config import Settings
 from .context import ContextManager
 from .extension_tools import register_extensions
 from .extensions import ExtensionConfig
+from .fastpath import FastAction, FastPathResolver
 from .mcp import MCPManager
 from .memory import MemoryStore
 from .middleware import MiddlewareManager
@@ -269,6 +270,8 @@ class Agent:
         exchanges: list[list[dict[str, Any]]] = []
         repeats: Counter[str] = Counter()
         read_files_executed = False
+        fastpath = FastPathResolver(self.settings.workspace)
+        pending_fast_action: FastAction | None = None
         if self.subagents:
             self.subagents.begin_run(goal, emit, approve)
         state = HarnessState(
@@ -314,14 +317,22 @@ class Agent:
                 ]
                 plan = None
                 decision = None
-                if self.planner:
-                    if self.settings.routing == "jev":
-                        plan, decision = await self._plan_and_route(state, tools, emit, step)
-                    else:
-                        plan = await self._plan(state, tools, emit, step)
+                available_tools = {tool.name for tool in tools}
+                fast_action = pending_fast_action
+                pending_fast_action = None
+                if fast_action is None and step == 1:
+                    fast_action = fastpath.resolve(goal, available_tools)
+
+                # Direct Jev routing no longer pays for a planner request. Planning is
+                # reserved for MCTS, where the simulated paths are actually consumed.
+                if self.planner and self.settings.routing == "mcts" and fast_action is None:
+                    plan = await self._plan(state, tools, emit, step)
+
                 await emit(AgentEvent("routing", "Choosing the next tool", step))
-                mode = "jev"
-                if self.settings.routing == "mcts" and plan:
+                mode = "fast" if fast_action else "jev"
+                if fast_action:
+                    decision = RouteDecision(tool=fast_action.tool, confidence=1.0)
+                elif self.settings.routing == "mcts" and plan:
                     try:
                         search = await self.router.route_mcts(state, tools, plan)
                         decision = search.decision
@@ -368,45 +379,67 @@ class Agent:
                 async def on_token(text: str, step_number: int = step) -> None:
                     await emit(AgentEvent("token", self.settings.redact(text), step_number))
 
-                await emit(AgentEvent("generating", "Generating tool arguments", step))
-                hook = await self.middleware.dispatch(
-                    "before_model", {"goal": goal, "step": step, "selected": selected}
-                )
-                schemas = [
-                    schema
-                    for schema in self.registry.schemas(selected)
-                    if not read_files_executed or schema["function"]["name"] != "read_files"
-                ]
-                messages = self._context(goal, exchanges, plan, schemas, hook.get("context", ""))
-                await emit(AgentEvent("context", step=step, data=self.context.stats.as_dict()))
-                async def complete_model(payload: dict[str, Any]) -> Completion:
-                    model_messages = payload.get("messages")
-                    model_schemas = payload.get("schemas")
-                    model_selected = payload.get("selected")
-                    if not isinstance(model_messages, list) or not isinstance(model_schemas, list):
-                        raise ToolError("model mod must pass messages and schemas lists")
-                    if model_selected is not None and not isinstance(model_selected, str):
-                        raise ToolError("model mod selected must be a string or None")
-                    return await self.executor.complete(
-                        model_messages,
-                        model_schemas,
-                        model_selected,
-                        on_token,
+                if fast_action:
+                    await emit(
+                        AgentEvent(
+                            "extension",
+                            f"Fast path · {fast_action.reason}",
+                            step,
+                            {"source": "fast_path", "tool": fast_action.tool},
+                        )
                     )
+                    completion = Completion(
+                        calls=[
+                            ToolCall(
+                                f"fast-{step}",
+                                fast_action.tool,
+                                json.dumps(fast_action.arguments),
+                            )
+                        ],
+                        model="fast-path",
+                        tokens=0,
+                    )
+                else:
+                    await emit(AgentEvent("generating", "Generating tool arguments", step))
+                    hook = await self.middleware.dispatch(
+                        "before_model", {"goal": goal, "step": step, "selected": selected}
+                    )
+                    schemas = [
+                        schema
+                        for schema in self.registry.schemas(selected)
+                        if not read_files_executed or schema["function"]["name"] != "read_files"
+                    ]
+                    messages = self._context(goal, exchanges, plan, schemas, hook.get("context", ""))
+                    await emit(AgentEvent("context", step=step, data=self.context.stats.as_dict()))
 
-                completion = await self.mods.invoke(
-                    "model",
-                    {
-                        "messages": messages,
-                        "schemas": schemas,
-                        "selected": selected,
-                        "goal": goal,
-                        "step": step,
-                    },
-                    complete_model,
-                )
-                if not isinstance(completion, Completion):
-                    raise ToolError("model mod must return a Completion")
+                    async def complete_model(payload: dict[str, Any]) -> Completion:
+                        model_messages = payload.get("messages")
+                        model_schemas = payload.get("schemas")
+                        model_selected = payload.get("selected")
+                        if not isinstance(model_messages, list) or not isinstance(model_schemas, list):
+                            raise ToolError("model mod must pass messages and schemas lists")
+                        if model_selected is not None and not isinstance(model_selected, str):
+                            raise ToolError("model mod selected must be a string or None")
+                        return await self.executor.complete(
+                            model_messages,
+                            model_schemas,
+                            model_selected,
+                            on_token,
+                        )
+
+                    completion = await self.mods.invoke(
+                        "model",
+                        {
+                            "messages": messages,
+                            "schemas": schemas,
+                            "selected": selected,
+                            "goal": goal,
+                            "step": step,
+                        },
+                        complete_model,
+                    )
+                    if not isinstance(completion, Completion):
+                        raise ToolError("model mod must return a Completion")
                 await emit(
                     AgentEvent(
                         "usage",
@@ -582,6 +615,12 @@ class Agent:
                     f"{'Success' if tool_result.ok else 'Error'}: {tool_result.content}"
                 )[:6000]
                 state.recent_actions.append(ActionSummary(call.name, state.observation[:2000]))
+                if tool_result.ok and call.name in {"edit_file", "write_file"}:
+                    changed_path = arguments.get("path")
+                    if isinstance(changed_path, str):
+                        pending_fast_action = fastpath.verification_for(
+                            changed_path, {tool.name for tool in self.registry.descriptors()}
+                        )
                 if call.name == "finish" and tool_result.ok:
                     result = RunResult("completed", arguments["summary"], step)
                     break

@@ -107,3 +107,50 @@ print(selection.candidate.action, selection.candidate.path)
 
 Keep the candidate list small and evidence-rich: cheap repository search should narrow
 the codebase first, then JEV decides among the strongest concrete next actions.
+
+
+## Python mods
+
+PyLattice mods are trusted Python functions that can change built-in behavior, inspired by
+Claude Code mods. A mod can run before and after an operation, rewrite its payload, replace
+the operation entirely by not calling `next`, or wrap it by doing work on both sides of
+`await next(payload)`.
+
+Supported events:
+
+- `model` — rewrite model messages, schemas, or the selected tool; replace model execution.
+- `tool` — rewrite, block, retry, wrap, or replace a tool execution.
+- `permission` — approve or deny a permission request programmatically.
+- `render` — rewrite, suppress, or replace an `AgentEvent` before the TUI receives it.
+
+Workspace mods live in `.agent-tui/mods/*.py`. Mods may also ship inside installed plugins
+under their configured `mods_path` (default: `mods`). They load in filename/plugin order.
+The first loaded mod sees the event first and receives the final result last.
+
+```python
+# .agent-tui/mods/01-protect-production.py
+EVENTS = ("tool",)
+
+async def mod(event, payload, next):
+    if payload["tool"] == "run_command":
+        command = " ".join(payload["arguments"].get("argv", []))
+        if "production" in command:
+            raise RuntimeError("production commands are blocked")
+
+    result = await next(payload)
+    return result
+```
+
+Calling `next` is optional:
+
+```python
+EVENTS = ("permission",)
+
+async def mod(event, payload, next):
+    if payload["tool"] == "run_command":
+        return False          # replace the built-in permission flow
+    return await next(payload)
+```
+
+Mods execute in-process with the same OS permissions as PyLattice. They are not sandboxed.
+Only install or enable mods from code you trust.

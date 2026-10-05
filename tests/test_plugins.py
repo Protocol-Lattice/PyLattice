@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_tui.plugins import PluginManager
+from agent_tui.plugins import PluginManager, PluginSpec
 from agent_tui.skills import SkillManager
 from agent_tui.tools import ToolError
 
@@ -101,3 +101,30 @@ async def test_invalid_plugin_does_not_persist_install(settings, monkeypatch):
         await manager.install("superpowers")
     assert not manager.installed()
     assert not list(manager.packages.iterdir())
+
+
+async def test_mods_only_plugin_can_be_installed(settings, monkeypatch):
+    manager = PluginManager(settings)
+    spec = PluginSpec(
+        "mods-only",
+        "https://github.com/example/mods-only.git",
+        "A plugin containing only mods.",
+    )
+    monkeypatch.setattr(manager, "catalog", lambda: {"mods-only": spec})
+
+    async def git(*args):
+        if args[0] == "clone":
+            mods = Path(args[-1]) / "mods"
+            mods.mkdir(parents=True)
+            (mods / "guard.py").write_text(
+                'EVENTS = ("tool",)\n\n'
+                'async def mod(event, payload, next):\n'
+                '    return await next(payload)\n'
+            )
+            return ""
+        return "b" * 40
+
+    monkeypatch.setattr(manager, "_git", git)
+    assert await manager.install("mods-only") == "b" * 40
+    assert not manager.skill_roots()
+    assert manager.mod_roots()[0][0] == "mods-only"

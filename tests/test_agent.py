@@ -66,7 +66,7 @@ async def test_real_execution_updates_routing_and_executor_history(settings, tmp
         events.append(event)
 
     agent = Agent(settings, router, executor)
-    result = await agent.run("Read hello.txt", emit, deny)
+    result = await agent.run("Tell me what hello.txt contains", emit, deny)
     assert result.status == "completed"
     assert "hello world" in router.states[1].observation
     assert router.states[1].last_action == "read_file"
@@ -360,3 +360,94 @@ def test_context_pruning_keeps_tool_exchanges_intact(settings):
         if message["role"] == "tool":
             assert messages[i - 1]["tool_calls"][0]["id"] == message["tool_call_id"]
     assert len(messages) < 14
+
+
+async def test_obvious_read_skips_router_and_first_executor_call(settings, tmp_path):
+    (tmp_path / "hello.txt").write_text("fast hello")
+    router = FakeRouter(RouteDecision(tool="finish", confidence=0.99))
+    executor = FakeExecutor(call("finish", {"summary": "fast hello"}))
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await Agent(settings, router, executor).run("Read hello.txt", emit, deny)
+
+    assert result.status == "completed"
+    assert len(router.states) == 1
+    assert len(executor.requests) == 1
+    assert router.states[0].last_action == "read_file"
+    assert "fast hello" in router.states[0].observation
+    assert any(event.kind == "extension" and "Fast path" in event.text for event in events)
+
+
+async def test_direct_jev_does_not_call_planner(settings):
+    class CountingPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        async def plan(self, state, tools):
+            self.calls += 1
+            raise AssertionError("planner should not run for direct Jev routing")
+
+    planner = CountingPlanner()
+    router = FakeRouter(RouteDecision(tool="finish", confidence=0.99))
+    executor = FakeExecutor(call("finish", {"summary": "Done"}))
+    direct = replace(settings, routing="jev", planning=True)
+
+    result = await Agent(direct, router, executor, planner=planner).run(
+        "Explain the architecture", ignore, deny
+    )
+
+    assert result.status == "completed"
+    assert planner.calls == 0
+    assert len(router.states) == 1
+    assert len(executor.requests) == 1
+
+
+async def test_edit_schedules_related_test_without_router_or_executor(settings, tmp_path):
+    source = tmp_path / "src" / "agent_tui"
+    source.mkdir(parents=True)
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (source / "sample.py").write_text("value = 1\n")
+    (tests / "test_sample.py").write_text("def test_sample():\n    assert True\n")
+
+    router = FakeRouter(
+        RouteDecision(tool="edit_file", confidence=0.99),
+        RouteDecision(tool="finish", confidence=0.99),
+    )
+    executor = FakeExecutor(
+        call(
+            "edit_file",
+            {"path": "src/agent_tui/sample.py", "old_text": "value = 1", "new_text": "value = 2"},
+        ),
+        call("finish", {"summary": "Verified"}),
+    )
+
+    approvals = []
+
+    async def approve(name, preview):
+        approvals.append((name, preview))
+        return True
+
+    agent = Agent(settings, router, executor)
+    # Avoid actually launching pytest; preserve the execution boundary while making the
+    # deterministic verification cheap and observable.
+    original_execute = agent.registry.execute
+
+    async def execute(name, arguments):
+        if name == "run_command":
+            from agent_tui.tools import ToolResult
+
+            return ToolResult(True, "1 passed")
+        return await original_execute(name, arguments)
+
+    agent.registry.execute = execute
+    result = await agent.run("Change sample value", ignore, approve)
+
+    assert result.status == "completed"
+    assert len(router.states) == 2
+    assert len(executor.requests) == 2
+    assert any(name == "run_command" for name, _ in approvals)
+    assert "run_command" in router.states[-1].recent_actions[-1].tool

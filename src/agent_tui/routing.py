@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from collections import OrderedDict
 from collections.abc import Sequence
 
 import httpx
@@ -49,6 +52,8 @@ class HarnessDecisionLayer:
             if settings.api_key
             else None
         )
+        self._route_cache: OrderedDict[str, RouteDecision] = OrderedDict()
+        self._route_cache_size = 128
         self.router = (
             JevToolRouter(
                 self.provider,
@@ -69,15 +74,42 @@ class HarnessDecisionLayer:
     async def route(self, state: HarnessState, tools: Sequence[ToolDescriptor]) -> RouteDecision:
         if not self.router:
             return RouteDecision.fallback_to_planner("missing_openrouter_api_key")
+        cache_key = self._cache_key(state, tools)
+        cached = self._route_cache.get(cache_key)
+        if cached is not None:
+            self._route_cache.move_to_end(cache_key)
+            return cached
         try:
             async with asyncio.timeout(self.settings.router_timeout + 1):
                 decision = await self.router.route(state, tools)
                 if decision.fallback_reason == "provider_error" and self.provider:
                     detail = self.settings.redact(self.provider.last_error)[:500]
                     return RouteDecision.fallback_to_planner(f"provider_error: {detail}")
+                if not decision.fallback:
+                    self._route_cache[cache_key] = decision
+                    self._route_cache.move_to_end(cache_key)
+                    while len(self._route_cache) > self._route_cache_size:
+                        self._route_cache.popitem(last=False)
                 return decision
         except TimeoutError:
             return RouteDecision.fallback_to_planner("routing_timeout")
+
+    @staticmethod
+    def _cache_key(state: HarnessState, tools: Sequence[ToolDescriptor]) -> str:
+        payload = {
+            "state": state.compact(),
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "category": tool.category,
+                    "risk": tool.risk.value,
+                }
+                for tool in tools
+            ],
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     async def aclose(self) -> None:
         if self.provider:

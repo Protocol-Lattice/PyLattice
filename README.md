@@ -69,3 +69,41 @@ Configuration, commands, and example descriptions: [extensions documentation](do
 ## License
 
 This project is open source. See the LICENSE file for details.
+
+
+## JEV codebase action routing
+
+PyLattice can use the existing JEV decision layer to compare concrete codebase actions,
+not only generic tools. Build a short list such as `read_file:tests/test_x.py`,
+`edit_file:src/x.py`, `write_file:src/new.py`, or `run_tests`, then let JEV pick
+the single best next step:
+
+```python
+from agent_tui.code_actions import CodeAction, CodeActionCandidate, CodebaseActionRouter
+from agent_tui.routing import HarnessDecisionLayer
+
+layer = HarnessDecisionLayer(settings)
+router = CodebaseActionRouter(layer)
+
+selection = await router.choose(
+    "Fix malformed OpenRouter JSON handling",
+    [
+        CodeActionCandidate(
+            CodeAction.READ,
+            "tests/test_openrouter.py",
+            "Inspect expected behavior before editing.",
+        ),
+        CodeActionCandidate(
+            CodeAction.PATCH,
+            "src/agent_tui/openrouter.py",
+            "Patch the response parser where the failure occurs.",
+            ("The stack trace points at response parsing.",),
+        ),
+    ],
+)
+
+print(selection.candidate.action, selection.candidate.path)
+```
+
+Keep the candidate list small and evidence-rich: cheap repository search should narrow
+the codebase first, then JEV decides among the strongest concrete next actions.

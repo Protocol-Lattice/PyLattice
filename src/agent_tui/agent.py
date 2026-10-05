@@ -18,6 +18,7 @@ from .mcp import MCPManager
 from .memory import MemoryStore
 from .middleware import MiddlewareManager
 from .models import AgentEvent, Approval, Completion, EventSink, RunResult, TokenSink, ToolCall
+from .mods import ModManager
 from .openrouter import ExecutorError
 from .planner import Plan, Planner, PlanningError
 from .plugins import PluginManager
@@ -95,6 +96,7 @@ class Agent:
         self.memory = MemoryStore(settings)
         self.plugins = PluginManager(settings)
         self.skills = SkillManager(settings, self.plugins.skill_roots())
+        self.mods = ModManager(settings, self.plugins.mod_roots())
         extensions = ExtensionConfig.load(settings)
         self.middleware = middleware or MiddlewareManager(settings, extensions.hooks)
         self.mcp = MCPManager(settings, extensions.servers)
@@ -151,6 +153,7 @@ class Agent:
         pinned = set(self.skills.pinned)
         task_goal = self.skills.task_goal
         self.skills = SkillManager(self.settings, self.plugins.skill_roots())
+        self.mods = ModManager(self.settings, self.plugins.mod_roots())
         self.skills.task_goal = task_goal
         for name in active:
             if name in self.skills.skills:
@@ -251,6 +254,18 @@ class Agent:
         if not goal.strip():
             raise ValueError("Enter a task first")
         self.running = True
+        raw_emit = emit
+
+        async def emit_modded(event: AgentEvent) -> None:
+            async def terminal(payload: dict[str, Any]) -> None:
+                rendered = payload.get("event")
+                if not isinstance(rendered, AgentEvent):
+                    raise ToolError("render mod must pass an AgentEvent in payload['event']")
+                await raw_emit(rendered)
+
+            await self.mods.invoke("render", {"event": event}, terminal)
+
+        emit = emit_modded
         exchanges: list[list[dict[str, Any]]] = []
         repeats: Counter[str] = Counter()
         read_files_executed = False
@@ -364,12 +379,34 @@ class Agent:
                 ]
                 messages = self._context(goal, exchanges, plan, schemas, hook.get("context", ""))
                 await emit(AgentEvent("context", step=step, data=self.context.stats.as_dict()))
-                completion = await self.executor.complete(
-                    messages,
-                    schemas,
-                    selected,
-                    on_token,
+                async def complete_model(payload: dict[str, Any]) -> Completion:
+                    model_messages = payload.get("messages")
+                    model_schemas = payload.get("schemas")
+                    model_selected = payload.get("selected")
+                    if not isinstance(model_messages, list) or not isinstance(model_schemas, list):
+                        raise ToolError("model mod must pass messages and schemas lists")
+                    if model_selected is not None and not isinstance(model_selected, str):
+                        raise ToolError("model mod selected must be a string or None")
+                    return await self.executor.complete(
+                        model_messages,
+                        model_schemas,
+                        model_selected,
+                        on_token,
+                    )
+
+                completion = await self.mods.invoke(
+                    "model",
+                    {
+                        "messages": messages,
+                        "schemas": schemas,
+                        "selected": selected,
+                        "goal": goal,
+                        "step": step,
+                    },
+                    complete_model,
                 )
+                if not isinstance(completion, Completion):
+                    raise ToolError("model mod must return a Completion")
                 await emit(
                     AgentEvent(
                         "usage",
@@ -435,19 +472,73 @@ class Agent:
                             "approach or use finish to report the blocker."
                         )
                     await emit(AgentEvent("tool_start", call.name, step, {"arguments": arguments}))
-                    if self.registry.requires_approval(call.name):
-                        preview = self.registry.preview(call.name, arguments)
-                        await emit(AgentEvent("approval", call.name, step))
-                        if not await approve(call.name, self.settings.redact(preview)):
-                            raise ToolError("User denied this action. Do not bypass the denial.")
-                        # Re-read immediately after approval; don't execute a changed diff.
-                        if preview != self.registry.preview(call.name, arguments):
-                            raise ToolError(
-                                "File changed while approval was pending; inspect and retry"
+                    async def execute_tool(payload: dict[str, Any]) -> dict[str, Any]:
+                        tool_name = payload.get("tool")
+                        tool_arguments = payload.get("arguments")
+                        if not isinstance(tool_name, str) or not isinstance(tool_arguments, dict):
+                            raise ToolError("tool mod must pass tool and arguments")
+                        validated = self.registry.validate(tool_name, json.dumps(tool_arguments))
+
+                        if self.registry.requires_approval(tool_name):
+                            preview = self.registry.preview(tool_name, validated)
+                            await emit(AgentEvent("approval", tool_name, step))
+
+                            async def request_permission(permission_payload: dict[str, Any]) -> bool:
+                                permission_tool = permission_payload.get("tool")
+                                permission_preview = permission_payload.get("preview")
+                                if not isinstance(permission_tool, str) or not isinstance(
+                                    permission_preview, str
+                                ):
+                                    raise ToolError("permission mod must pass tool and preview")
+                                return await approve(
+                                    permission_tool, self.settings.redact(permission_preview)
+                                )
+
+                            allowed = await self.mods.invoke(
+                                "permission",
+                                {"tool": tool_name, "preview": preview, "step": step},
+                                request_permission,
                             )
-                    if call.name == "read_files":
+                            if allowed is not True:
+                                raise ToolError(
+                                    "User or permission mod denied this action. "
+                                    "Do not bypass the denial."
+                                )
+                            if preview != self.registry.preview(tool_name, validated):
+                                raise ToolError(
+                                    "File changed while approval was pending; inspect and retry"
+                                )
+
+                        result = await self.registry.execute(tool_name, validated)
+                        return {
+                            "tool": tool_name,
+                            "arguments": validated,
+                            "result": result,
+                        }
+
+                    mod_result = await self.mods.invoke(
+                        "tool",
+                        {"tool": call.name, "arguments": arguments, "step": step},
+                        execute_tool,
+                    )
+                    if (
+                        not isinstance(mod_result, dict)
+                        or not isinstance(mod_result.get("tool"), str)
+                        or not isinstance(mod_result.get("arguments"), dict)
+                        or not isinstance(mod_result.get("result"), ToolResult)
+                    ):
+                        raise ToolError(
+                            "tool mod must return {'tool', 'arguments', 'result': ToolResult}"
+                        )
+                    executed_tool = mod_result["tool"]
+                    arguments = mod_result["arguments"]
+                    tool_result = mod_result["result"]
+                    if executed_tool != call.name:
+                        call = ToolCall(call.id, executed_tool, json.dumps(arguments))
+                        exchange[0]["tool_calls"][0]["function"]["name"] = executed_tool
+                    exchange[0]["tool_calls"][0]["function"]["arguments"] = json.dumps(arguments)
+                    if executed_tool == "read_files":
                         read_files_executed = True
-                    tool_result = await self.registry.execute(call.name, arguments)
                 except (ToolError, OSError, UnicodeError, ValueError) as exc:
                     tool_result = ToolResult(False, self.settings.redact(str(exc)))
                 except asyncio.CancelledError:

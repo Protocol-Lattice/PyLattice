@@ -450,4 +450,4 @@ async def test_edit_schedules_related_test_without_router_or_executor(settings, 
     assert len(router.states) == 2
     assert len(executor.requests) == 2
     assert any(name == "run_command" for name, _ in approvals)
-    assert "run_command" in router.states[-1].recent_actions[-1].tool
+    assert router.states[-1].last_action == "run_command"

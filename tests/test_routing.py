@@ -62,3 +62,37 @@ async def test_missing_key_fallback(settings):
     result = await layer.route(HarnessState(goal="hi"), [])
     assert result.fallback_reason == "missing_openrouter_api_key"
     await layer.aclose()
+
+
+async def test_exact_state_route_is_cached_but_observation_change_is_not(settings):
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "route": {
+                        "type": "choice",
+                        "choice": "read_file",
+                        "confidence": 0.99,
+                        "probabilities": {"read_file": 0.99},
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        layer = HarnessDecisionLayer(settings, client)
+        tools = ToolRegistry(settings).descriptors()
+        state = HarnessState(goal="Read file", observation="Not read yet")
+        first = await layer.route(state, tools)
+        second = await layer.route(state, tools)
+        third = await layer.route(
+            HarnessState(goal="Read file", observation="Read succeeded"), tools
+        )
+
+    assert first.tool == second.tool == third.tool == "read_file"
+    assert calls == 2

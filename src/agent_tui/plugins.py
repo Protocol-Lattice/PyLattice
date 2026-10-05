@@ -134,12 +134,24 @@ class PluginManager:
         for name, entry in self.installed().items():
             if entry["enabled"]:
                 package = self.packages / name
-                root = package / entry["spec"]["skills_path"]
+                root = package / entry["spec"].get("skills_path", "skills")
                 if package.is_symlink() or not root.resolve().is_relative_to(package.resolve()):
                     raise ToolError(f"Invalid plugin skill directory: {name}")
-                if not root.is_dir():
-                    raise ToolError(f"Plugin {name} is missing its skills; reinstall it")
-                result.append((name, root))
+                if root.is_dir():
+                    result.append((name, root))
+        return result
+
+    def mod_roots(self) -> list[tuple[str, Path]]:
+        """Enabled plugin mod directories, in plugin load order."""
+        result = []
+        for name, entry in self.installed().items():
+            if entry["enabled"]:
+                package = self.packages / name
+                root = package / entry["spec"].get("mods_path", "mods")
+                if package.is_symlink() or not root.resolve().is_relative_to(package.resolve()):
+                    raise ToolError(f"Invalid plugin mod directory: {name}")
+                if root.is_dir():
+                    result.append((name, root))
         return result
 
     def bootstrap_skills(self) -> list[str]:
@@ -209,20 +221,36 @@ class PluginManager:
             await self._git(
                 "clone", "--quiet", "--depth", "1", "--", spec.repository, str(checkout)
             )
-            root = checkout / spec.skills_path
-            if (
-                not root.is_dir()
-                or not root.resolve().is_relative_to(checkout.resolve())
-                or not any(root.glob("*/SKILL.md"))
-            ):
-                raise ToolError("Plugin contains no usable skills directory")
-            from .skills import SkillManager
+            skill_root = checkout / spec.skills_path
+            mods_root = checkout / spec.mods_path
+            has_skills = (
+                skill_root.is_dir()
+                and skill_root.resolve().is_relative_to(checkout.resolve())
+                and any(skill_root.glob("*/SKILL.md"))
+            )
+            has_mods = (
+                mods_root.is_dir()
+                and mods_root.resolve().is_relative_to(checkout.resolve())
+                and any(path.is_file() and not path.name.startswith("_") for path in mods_root.glob("*.py"))
+            )
+            if not has_skills and not has_mods:
+                raise ToolError("Plugin contains no usable skills or mods")
 
-            catalog = SkillManager(self.settings, [(name, root)])
-            if not any(key.startswith(name + ":") for key in catalog.skills):
-                raise ToolError("Plugin contains no valid SKILL.md files")
-            if spec.bootstrap and f"{name}:{spec.bootstrap}" not in catalog.skills:
-                raise ToolError("Plugin bootstrap skill is missing or invalid")
+            if has_skills:
+                from .skills import SkillManager
+
+                catalog = SkillManager(self.settings, [(name, skill_root)])
+                if not any(key.startswith(name + ":") for key in catalog.skills):
+                    raise ToolError("Plugin contains no valid SKILL.md files")
+                if spec.bootstrap and f"{name}:{spec.bootstrap}" not in catalog.skills:
+                    raise ToolError("Plugin bootstrap skill is missing or invalid")
+            elif spec.bootstrap:
+                raise ToolError("Plugin bootstrap skill is configured but no skills are present")
+
+            if has_mods:
+                from .mods import ModManager
+
+                ModManager(self.settings, [(name, mods_root)])
             commit = await self._git("-C", str(checkout), "rev-parse", "HEAD")
             checkout.rename(destination)
             entries[name] = {"spec": asdict(spec), "commit": commit, "enabled": True}

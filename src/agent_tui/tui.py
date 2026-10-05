@@ -577,6 +577,22 @@ class AgentApp(App):
                     text += "No command hooks configured. See `examples/extensions.toml`."
                 if self.settings.demo or self.settings.read_only:
                     text += "\n\nCommand hooks are disabled in demo and read-only modes."
+            elif name == "/mods":
+                if argument not in {"", "reload"}:
+                    raise ToolError("Use /mods or /mods reload")
+                if argument == "reload":
+                    self.agent.mods.reload()
+                names = self.agent.mods.names()
+                text = (
+                    "\n\n".join(f"**{mod_name}**" for mod_name in names)
+                    if names
+                    else "No mods loaded."
+                )
+                text += (
+                    "\n\nReloaded." if argument == "reload" else
+                    "\n\nAdd trusted workspace mods to `.agent-tui/mods/*.py` "
+                    "or install a plugin that ships mods."
+                )
             elif name == "/context":
                 stats = self.agent.context.stats
                 text = (
@@ -629,7 +645,7 @@ class AgentApp(App):
             self.agent.refresh_skills()
             await self._message(
                 "PLUGINS",
-                f"Installed **{name}** at `{commit[:12]}`. Skills are ready in `/skills`. "
+                f"Installed **{name}** at `{commit[:12]}`. Skills are in `/skills`; mods are in `/mods`. "
                 + (
                     "Use `/skill superpowers:brainstorming` for brainstorming."
                     if name == "superpowers"

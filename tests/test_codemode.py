@@ -5,17 +5,27 @@ import copy
 import json
 from dataclasses import replace
 
+import httpx
 import pytest
+from harness_router import RouteDecision
 
 from agent_tui.agent import Agent
 from agent_tui.codemode import execute_code
 from agent_tui.models import Completion, ToolCall
+from agent_tui.routing import HarnessDecisionLayer
 from agent_tui.tools import ToolResult, ToolSpec, object_schema
 
 
-class UnusedDecisions:
-    async def route(self, *_):
-        pytest.fail("Code Mode must not call the router")
+class CodeDecisions:
+    def __init__(self, *decisions):
+        self.decisions = iter(decisions)
+        self.states = []
+        self.catalogs = []
+
+    async def route(self, state, tools):
+        self.states.append(copy.deepcopy(state))
+        self.catalogs.append([tool.name for tool in tools])
+        return next(self.decisions, RouteDecision.fallback_to_planner("test_fallback"))
 
     async def route_mcts(self, *_):
         pytest.fail("Code Mode must not call MCTS")
@@ -53,7 +63,7 @@ async def deny(*_):
 def agent_for(settings, *codes, **overrides):
     settings = replace(settings, code_mode=True, **overrides)
     executor = Executor(*codes)
-    return Agent(settings, UnusedDecisions(), executor, planner=UnusedDecisions()), executor
+    return Agent(settings, CodeDecisions(), executor, planner=CodeDecisions()), executor
 
 
 def result_before(executor, index=1):
@@ -84,6 +94,8 @@ for path in listing["output"]["files"]:
     result = await agent.run("Count lines", emit, deny)
     assert result.status == "completed" and result.steps == 2
     assert len(executor.requests) == 2
+    assert len(agent.router.states) == 2
+    assert all(set(catalog) == {"execute_code", "finish"} for catalog in agent.router.catalogs)
     assert json.loads(result_before(executor)["output"])["output"] == {"line_count": 2}
     assert "1: one" not in result_before(executor)["output"]
     assert all(selected is None for _, _, selected in executor.requests)
@@ -92,6 +104,108 @@ for path in listing["output"]["files"]:
     starts = [e for e in events if e.kind == "tool_start"]
     assert [e.text for e in starts] == ["execute_code", "list_files", "read_file", "read_file"]
     assert len({e.data["call_id"] for e in starts}) == 4
+    assert "execute_code" not in agent.registry.specs
+
+
+async def test_configured_decision_model_routes_programs_from_latest_results(settings, tmp_path):
+    (tmp_path / "file.py").write_text("observed source")
+    agent, executor = agent_for(
+        settings,
+        'listing = await call_tool("list_files", {})\n'
+        'await call_tool("read_file", {"path": listing["output"]["files"][0]})',
+        router_model="test/decision-model",
+    )
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        choice = "execute_code" if len(payloads) == 1 else "finish"
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "route": {
+                        "type": "choice",
+                        "choice": choice,
+                        "confidence": 0.99,
+                        "probabilities": {choice: 0.99},
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        agent.router = HarnessDecisionLayer(agent.settings, client)
+        result = await agent.run("Inspect the source", ignore, deny)
+    assert result.status == "completed"
+    assert len(payloads) == 2
+    assert all(payload["model"] == "test/decision-model" for payload in payloads)
+    assert "1: observed source" in json.dumps(payloads[1])
+    assert [selected for _, _, selected in executor.requests] == ["execute_code", "finish"]
+    assert [
+        [schema["function"]["name"] for schema in schemas] for _, schemas, _ in executor.requests
+    ] == [["execute_code"], ["finish"]]
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [RouteDecision.fallback_to_planner("provider_error"), RouteDecision(tool="read_file")],
+)
+async def test_code_mode_routing_fallback_exposes_only_program_and_finish(settings, decision):
+    agent, executor = agent_for(settings, 'await call_tool("list_files", {})')
+    agent.router = CodeDecisions(decision)
+    result = await agent.run("Inspect", ignore, deny)
+    assert result.status == "completed" and result_before(executor)["ok"]
+    _, schemas, selected = executor.requests[0]
+    assert selected is None
+    assert {schema["function"]["name"] for schema in schemas} == {"execute_code", "finish"}
+
+
+@pytest.mark.parametrize(
+    "selected,returned",
+    [("finish", "execute_code"), ("finish", "write_file"), ("execute_code", "finish")],
+)
+async def test_code_mode_enforces_the_decision_before_execution(
+    settings, tmp_path, selected, returned
+):
+    arguments = {
+        "execute_code": {
+            "code": 'await call_tool("write_file", {"path": "file", "content": "bad"})'
+        },
+        "write_file": {"path": "file", "content": "bad"},
+        "finish": {"summary": "Premature finish"},
+    }
+    agent, executor = agent_for(settings, auto_approve=True)
+    agent.router = CodeDecisions(RouteDecision(tool=selected), RouteDecision(tool="finish"))
+    executor.completions = iter(
+        [
+            Completion(calls=[ToolCall("mismatch", returned, json.dumps(arguments[returned]))]),
+            Completion(content="Done"),
+        ]
+    )
+    result = await agent.run("Inspect", ignore, deny)
+    assert result.status == "completed" and result.message == "Done"
+    assert not (tmp_path / "file").exists()
+    rejected = result_before(executor)
+    assert not rejected["ok"] and f"Return a call to one of: {selected}" in rejected["output"]
+
+
+async def test_cancellation_during_code_mode_routing_does_not_reach_executor(settings):
+    entered = asyncio.Event()
+
+    class WaitingRouter(CodeDecisions):
+        async def route(self, *_):
+            entered.set()
+            await asyncio.Future()
+
+    agent, executor = agent_for(settings)
+    agent.router = WaitingRouter()
+    task = asyncio.create_task(agent.run("Inspect", ignore, deny))
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    result = await asyncio.wait_for(task, 2)
+    assert result.status == "cancelled" and not agent.running
+    assert not executor.requests
     assert "execute_code" not in agent.registry.specs
 
 
@@ -236,24 +350,86 @@ async def test_removed_bulk_read_is_rejected_in_code_mode(settings, direct):
 
 
 async def test_repeat_guards_span_programs_but_reset_for_new_task(settings):
+    code = 'await call_tool("write_file", {"path": "file", "content": "source"})'
     agent, executor = agent_for(
         settings,
-        'await call_tool("list_files", {})',
-        'listing = await call_tool("list_files", {})\nlisting',
-        'files = await call_tool("list_files", {})\nfiles',
+        code,
+        code,
+        code,
+        auto_approve=True,
     )
     await agent.run("Inspect", ignore, deny)
     assert result_before(executor, 1)["ok"] and result_before(executor, 2)["ok"]
     assert "Repeated identical action blocked" in result_before(executor, 3)["output"]
-    agent.executor = Executor('await call_tool("list_files", {})')
+    assert json.loads(result_before(executor, 3)["output"])["tools"] == [
+        {"tool": "write_file", "ok": False}
+    ]
+    agent.executor = Executor(code)
     await agent.run("Inspect again", ignore, deny)
     assert result_before(agent.executor)["ok"]
     agent.executor = Executor("""
 for i in range(3):
-    await call_tool("list_files", {})
+    await call_tool("write_file", {"path": "file", "content": "source"})
 """)
     await agent.run("Repeat", ignore, deny)
     assert "Repeated identical action blocked" in result_before(agent.executor)["output"]
+
+
+async def test_repeated_programs_can_read_patch_and_verify_current_contents(settings, tmp_path):
+    file = tmp_path / "counter.txt"
+    file.write_text("0")
+    code = """
+before = await call_tool("read_file", {"path": "counter.txt"})
+value = before["output"]["content"].split(": ")[1]
+await call_tool("edit_file", {
+    "path": "counter.txt", "old_text": value, "new_text": str(int(value) + 1)
+})
+after = await call_tool("read_file", {"path": "counter.txt"})
+after["output"]["content"]
+"""
+    agent, executor = agent_for(settings, code, code, code, auto_approve=True)
+    result = await agent.run("Increment and verify three times", ignore, deny)
+    assert result.status == "completed"
+    assert file.read_text() == "3"
+    for index in range(1, 4):
+        reply = result_before(executor, index)
+        assert reply["ok"]
+        assert json.loads(reply["output"])["output"] == f"1: {index}"
+
+
+async def test_repeated_failed_reads_are_still_blocked(settings):
+    agent, executor = agent_for(
+        settings,
+        *(f'{name} = await call_tool("read_file", {{"path": "missing"}})' for name in "abc"),
+    )
+    await agent.run("Inspect missing file", ignore, deny)
+    assert "File not found" in result_before(executor, 1)["output"]
+    assert "File not found" in result_before(executor, 2)["output"]
+    assert "Repeated identical action blocked" in result_before(executor, 3)["output"]
+    assert json.loads(result_before(executor, 3)["output"])["tools"] == [
+        {"tool": "read_file", "ok": False}
+    ]
+
+
+async def test_direct_file_access_error_explains_tool_bridge_and_agent_can_recover(
+    settings, tmp_path
+):
+    file = tmp_path / "file.py"
+    file.write_text("source")
+    agent, executor = agent_for(
+        settings,
+        f"open({str(file)!r}).read()",
+        'await call_tool("read_file", {"path": "file.py"})',
+    )
+    result = await agent.run("Read file.py", ignore, deny)
+    assert result.status == "completed"
+    denied = result_before(executor, 1)
+    assert not denied["ok"]
+    error = json.loads(denied["output"])["error"]
+    assert "Code Mode cannot access host files directly" in error
+    assert 'await call_tool("read_file"' in error
+    recovered = result_before(executor, 2)
+    assert recovered["ok"] and "1: source" in recovered["output"]
 
 
 async def test_cancellation_during_nested_approval_cleans_up_and_keeps_history(settings, tmp_path):

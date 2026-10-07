@@ -174,7 +174,7 @@ class AgentApp(App):
                 yield Static("EXECUTION", classes="section-title")
                 yield Static("● Idle", id="phase", markup=False)
                 method = (
-                    "Code Mode · Python tool programs"
+                    "Code Mode · Jev decisions + Python programs"
                     if self.settings.code_mode
                     else f"MCTS · {self.settings.mcts_simulations} simulations"
                     if self.settings.routing == "mcts"
@@ -183,9 +183,7 @@ class AgentApp(App):
                 yield Static(method, id="routing-mode", markup=False)
                 yield Static("DECISION MODEL", classes="field-label")
                 yield Static(
-                    "Not used in Code Mode"
-                    if self.settings.code_mode
-                    else ("offline/demo" if self.settings.demo else self.settings.router_model),
+                    "offline/demo" if self.settings.demo else self.settings.router_model,
                     id="router-model",
                     markup=False,
                 )
@@ -399,8 +397,6 @@ class AgentApp(App):
             self._stream_card, self._stream_text = None, ""
             self._stream_rendered = ""
             self._log(f"Step {event.step} · {event.text}")
-            if event.kind == "code_mode":
-                self.query_one("#next-tool", Static).update("execute_code or finish")
         elif event.kind == "route":
             if event.data["fallback"]:
                 detail = f"Fallback · {event.data['reason']}"

@@ -20,9 +20,11 @@ MEMORY_BYTES = 64 * 1024 * 1024
 
 CODE_SPEC = ToolSpec(
     "execute_code",
-    "Execute a sandboxed Python program to compose multiple tools in one model turn. "
+    "Execute a sandboxed Python program to inspect files, apply needed edits or writes, "
+    "and verify results. Continue with this tool after reading when requested changes remain. "
     "Use await call_tool(name, arguments) and return the useful data as the final expression. "
     "Tool calls retain validation, hooks and approvals. A failed tool stops further calls. "
+    "Host files are available only through call_tool, never Python open(). "
     "Programs are independent; variables do not persist between calls.",
     object_schema(
         {"code": {"type": "string", "minLength": 1, "maxLength": MAX_CODE_CHARS}}, ["code"]
@@ -31,8 +33,10 @@ CODE_SPEC = ToolSpec(
 )
 
 CODE_PROMPT = """Use Code Mode to carry out related actions in one execute_code call.
-Write Python using variables, loops, conditions and comprehensions. No planning or routing
-model runs between tools. Call tools with await call_tool("name", {"argument": value}).
+The decision model chooses execute_code or finish before each turn. Use the selected tool;
+on a routing fallback, choose either tool yourself. Write Python using variables, loops,
+conditions and comprehensions. No planning or routing model runs between calls inside a
+program. Call tools with await call_tool("name", {"argument": value}).
 Catalog names such as read_file and skill_search are call_tool arguments inside Python,
 not top-level function calls. The only top-level tools are execute_code and finish.
 The returned dict has ok and output; JSON tool output is already decoded, other output is
@@ -40,14 +44,19 @@ a string. Calls execute serially, including calls scheduled with asyncio.gather.
 Return only useful evidence as the program's final expression, or use print for short output.
 Intermediate tool results stay in the program. Each program starts fresh; variables do not
 persist. Use a new program only when you need to reason about the previous result.
+After reading, apply changes needed for the user's task: use edit_file for small patches or
+write_file for new files, then read back the changed content to verify it. Do this in the same
+program when the change is clear; otherwise return the relevant content and continue with a
+new program after reasoning about it. Leave files unchanged when the task needs no changes.
 All workspace, command, MCP, skill and memory access must go through call_tool. The sandbox
 has no host filesystem or network access. Do not use open, subprocess or third-party packages.
 Each program permits at most 32 tool calls, 5 seconds of computation and 64 MiB of memory.
 Waiting for a tool or user approval does not consume the computation budget. On any tool
 failure, further tool calls in that program are blocked, even if you catch the exception.
 Earlier successful actions are not rolled back. Inspect current state before retrying.
-execute_code and finish cannot be called inside a program. Use finish or answer directly
-after inspecting the program's output. Use exactly one top-level tool call per response.
+execute_code and finish cannot be called inside a program. Continue with execute_code while
+requested edits or verification remain. Use finish or answer directly only when the task is
+complete or needs a user answer. Use exactly one top-level tool call per response.
 Example:
 listing = await call_tool("list_files", {"path": "src"})
 results = []
@@ -162,7 +171,14 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
                 code, external_lookup={"call_tool": call_tool}, print_callback=printed
             )
     except (MontyError, ValueError, OSError) as exc:
-        failure = failure or settings.redact(str(exc) or type(exc).__name__)
+        if not failure:
+            failure = settings.redact(str(exc) or type(exc).__name__)
+            if isinstance(exc, MontyError) and isinstance(exc.exception(), PermissionError):
+                failure += (
+                    "\nCode Mode cannot access host files directly. Read files with "
+                    'await call_tool("read_file", {"path": "workspace-relative/path.py"}). '
+                    "Use edit_file for patches or write_file for new files through call_tool."
+                )
     finally:
         active = False
         pending = [task for task in callbacks if task is not asyncio.current_task()]

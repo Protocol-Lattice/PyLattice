@@ -273,11 +273,32 @@ async def test_file_change_during_approval_invalidates_diff(settings, tmp_path):
 
 
 async def test_repeated_actions_and_step_budget_stop_loop(settings):
-    router = FakeRouter(*(RouteDecision(tool="list_files") for _ in range(4)))
-    executor = FakeExecutor(*(call("list_files", {}) for _ in range(4)))
+    router = FakeRouter(*(RouteDecision(tool="write_file") for _ in range(4)))
+    executor = FakeExecutor(
+        *(call("write_file", {"path": "file", "content": "source"}) for _ in range(4))
+    )
     result = await Agent(settings, router, executor).run("Loop", ignore, allow)
     assert result.status == "limit"
     assert "Repeated identical action blocked" in executor.requests[3][0][-1]["content"]
+
+
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("read_file", {"path": "file.py"}),
+        ("list_files", {}),
+        ("search_files", {"query": "source"}),
+    ],
+)
+async def test_successful_file_inspection_can_repeat(settings, tmp_path, name, arguments):
+    (tmp_path / "file.py").write_text("source")
+    router = FakeRouter(*(RouteDecision(tool=name) for _ in range(3)), RouteDecision(tool="finish"))
+    executor = FakeExecutor(
+        *(call(name, arguments) for _ in range(3)), call("finish", {"summary": "Inspected"})
+    )
+    result = await Agent(settings, router, executor).run("Inspect", ignore, deny)
+    assert result.status == "completed"
+    assert all(json.loads(request[0][-1]["content"])["ok"] for request in executor.requests[1:])
 
 
 async def test_cancel_during_approval_keeps_tool_history_valid(settings, tmp_path):

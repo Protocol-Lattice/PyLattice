@@ -17,7 +17,10 @@ from .planner import Plan, PlanEnvironment, PredictedAction
 class DemoRouter:
     async def route(self, state: HarnessState, tools: Sequence[ToolDescriptor]) -> RouteDecision:
         await asyncio.sleep(0.25)
-        tool = "list_files" if not state.last_action else "finish"
+        first = (
+            "execute_code" if any(tool.name == "execute_code" for tool in tools) else "list_files"
+        )
+        tool = first if not state.last_action else "finish"
         return RouteDecision(tool=tool, confidence=1.0)
 
     async def aclose(self) -> None:

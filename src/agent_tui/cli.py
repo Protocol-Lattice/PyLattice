@@ -25,7 +25,7 @@ def parser() -> argparse.ArgumentParser:
         dest="code_mode",
         action="store_true",
         default=None,
-        help="Compose tool calls in sandboxed Python without routing/planning requests (default)",
+        help="Use the decision model to choose Python tool programs or finish (default)",
     )
     modes.add_argument(
         "--no-code-mode",
@@ -55,7 +55,7 @@ def parser() -> argparse.ArgumentParser:
     )
     cli.add_argument("--mcts-simulations", type=int, help="MCTS simulation budget (default: 64)")
     cli.add_argument("--mcts-depth", type=int, help="MCTS lookahead depth, 1–5 (default: 3)")
-    cli.add_argument("--max-steps", type=int, help="Maximum agent steps per task (default: 24)")
+    cli.add_argument("--max-steps", type=int, help="Maximum agent steps per task (default: 1024)")
     cli.add_argument("--command-timeout", type=float, help="Command time limit in seconds")
     cli.add_argument(
         "--context-chars",

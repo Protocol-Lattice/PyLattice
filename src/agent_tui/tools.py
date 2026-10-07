@@ -102,7 +102,8 @@ SPECS = [
     ),
     ToolSpec(
         "read_file",
-        "Read a UTF-8 file with line numbers; use ranges for large files.",
+        "Read a UTF-8 file with line numbers; use ranges for large files. When changes are "
+        "requested, follow the read with edit_file or write_file and verify the result.",
         READ_FILE_PARAMETERS,
     ),
     ToolSpec(

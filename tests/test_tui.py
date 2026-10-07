@@ -46,6 +46,9 @@ async def test_code_mode_demo_renders_each_nested_result_without_planning(settin
         assert not app._busy
         assert "Completed" in str(app.query_one("#phase", Static).render())
         assert "Code Mode" in str(app.query_one("#routing-mode", Static).render())
+        assert "Jev" in str(app.query_one("#routing-mode", Static).render())
+        assert "offline/demo" in str(app.query_one("#router-model", Static).render())
+        assert "finish" in str(app.query_one("#next-tool", Static).render())
         assert not any(role in {"PLAN", "MCTS"} for role, _ in app.transcript)
         assert [role for role, _ in app.transcript if role.startswith("TOOL ")] == [
             "TOOL list_files",
@@ -59,6 +62,7 @@ async def test_code_mode_demo_renders_each_nested_result_without_planning(settin
 async def test_failed_code_is_expanded_with_its_own_result(settings):
     app = AgentApp(replace(settings, code_mode=True))
     async with app.run_test():
+        assert settings.router_model in str(app.query_one("#router-model", Static).render())
         for name, call_id in [("execute_code", 1), ("read_file", 2)]:
             await app._event(
                 AgentEvent("tool_start", name, step=1, data={"call_id": call_id, "arguments": {}})

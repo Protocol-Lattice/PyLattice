@@ -2,7 +2,7 @@
 
 A terminal-based coding agent that uses **Code Mode** to write Python programs that call tools, pass results between them, and return useful output in a single run.
 
-Routes requests through OpenRouter's [free router](https://openrouter.ai/docs/guides/routing/routers/free-router) by default, with **Harness Router** always available for per-tool routing decisions.
+Routes executor requests through OpenRouter's [free router](https://openrouter.ai/docs/guides/routing/routers/free-router) by default. **Harness Router** uses the configured decision model to select each Code Mode turn or individual tools in the routed loop.
 
 ---
 
@@ -41,9 +41,10 @@ Each request uses a 64,000-character context budget, task-relevant history, and 
 
 ### Code Mode
 
-Enabled by default via `--code-mode` flag or `AGENT_TUI_CODE_MODE=true`. In Code Mode, the model receives `execute_code` and `finish` tools plus a catalog of workspace, skill, memory, delegation, and MCP tools. A program can make dependent tool calls without requiring another model request between them.
+Enabled by default via `--code-mode` flag or `AGENT_TUI_CODE_MODE=true`. The decision model (`--router-model` or `AGENT_TUI_ROUTER_MODEL`) chooses `execute_code` or `finish` once per turn using the latest result. The executor then writes the selected program or final answer, with a catalog of workspace, skill, memory, delegation, and MCP tools. On a routing fallback, the executor chooses between both tools. A program can make dependent tool calls without requiring another model request between them.
 
 **Example:**
+
 ```python
 listing = await call_tool("list_files", {"path": "src"})
 results = []
@@ -51,7 +52,6 @@ for path in listing["output"]["files"][:3]:
     result = await call_tool("read_file", {"path": path})
     results.append(result["output"])
 results
-```
 
 **Behavior:**
 
@@ -92,7 +92,7 @@ Use these flags to control routing behavior:
 - `--routing`, `--route-mcts`, `--no-planner`, or `--fast` — Select the routed loop
 - `--max-steps` — Bound model turns (a Code Mode turn can contain several tool actions)
 
-The activity panel shows every nested call, and failed actions expand to show their error. Interrupted provider responses are retried up to three attempts when no response text has been displayed; incomplete tool calls are never executed.
+The activity panel shows every nested call, and failed actions expand to show their error. Incomplete tool calls are never executed; interrupted provider responses are retried up to three attempts when no response text has been displayed.
 
 ---
 

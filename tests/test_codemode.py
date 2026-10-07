@@ -88,6 +88,7 @@ for path in listing["output"]["files"]:
     assert "1: one" not in result_before(executor)["output"]
     assert all(selected is None for _, _, selected in executor.requests)
     assert {s["function"]["name"] for s in executor.requests[0][1]} == {"execute_code", "finish"}
+    assert "read_files" not in executor.requests[0][0][0]["content"]
     starts = [e for e in events if e.kind == "tool_start"]
     assert [e.text for e in starts] == ["execute_code", "list_files", "read_file", "read_file"]
     assert len({e.data["call_id"] for e in starts}) == 4
@@ -203,15 +204,48 @@ await call_tool("write_file", {"path": "last", "content": "bad"})
     assert '"name":"mcp__example__add"' in executor.requests[0][0][0]["content"]
 
 
-async def test_read_files_and_repeat_guards_span_programs_but_reset_for_new_task(settings):
+@pytest.mark.parametrize("direct", [False, True])
+async def test_removed_bulk_read_is_rejected_in_code_mode(settings, direct):
     agent, executor = agent_for(
         settings,
         'await call_tool("read_files", {})',
-        'await call_tool("read_files", {})',
+    )
+    if direct:
+        executor.completions = iter(
+            [
+                Completion(calls=[ToolCall("removed", "read_files", "{}")]),
+                Completion(content="Done"),
+            ]
+        )
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await agent.run("Inspect", emit, deny)
+    assert result.status == "completed"
+    assert "read_files" not in executor.requests[0][0][0]["content"]
+    assert not result_before(executor)["ok"]
+    expected = (
+        "Return a call to one of: execute_code, finish"
+        if direct
+        else "Tool is not available: read_files"
+    )
+    assert expected in result_before(executor)["output"]
+    assert not any(event.kind == "tool_start" and event.text == "read_files" for event in events)
+
+
+async def test_repeat_guards_span_programs_but_reset_for_new_task(settings):
+    agent, executor = agent_for(
+        settings,
+        'await call_tool("list_files", {})',
+        'listing = await call_tool("list_files", {})\nlisting',
+        'files = await call_tool("list_files", {})\nfiles',
     )
     await agent.run("Inspect", ignore, deny)
-    assert "read_files already executed" in result_before(executor, 2)["output"]
-    agent.executor = Executor('await call_tool("read_files", {})')
+    assert result_before(executor, 1)["ok"] and result_before(executor, 2)["ok"]
+    assert "Repeated identical action blocked" in result_before(executor, 3)["output"]
+    agent.executor = Executor('await call_tool("list_files", {})')
     await agent.run("Inspect again", ignore, deny)
     assert result_before(agent.executor)["ok"]
     agent.executor = Executor("""

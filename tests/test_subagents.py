@@ -73,7 +73,7 @@ async def test_delegation_runs_concurrently_with_isolated_contexts(settings, tmp
     class Reader(Executor):
         async def complete(self, messages, schemas, selected, on_token):
             nonlocal entered
-            if selected == "read_files":
+            if selected == "read_file":
                 entered += 1
                 if entered == 2:
                     together.set()
@@ -84,9 +84,9 @@ async def test_delegation_runs_concurrently_with_isolated_contexts(settings, tmp
         index = len(children)
         child = Agent(
             settings,
-            Router("read_files", "finish"),
+            Router("read_file", "finish"),
             Reader(
-                call("read_files", {"files": [{"path": f"{index}.py"}]}),
+                call("read_file", {"path": f"{index}.py"}),
                 call("finish", {"summary": f"Inspected {index}.py"}),
             ),
             allow_delegation=False,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
-import heapq
 import json
 import os
 import signal
@@ -51,7 +50,11 @@ def object_schema(properties: dict[str, Any], required: list[str] | None = None)
     }
 
 
-PATH = {"type": "string", "minLength": 1, "description": "Workspace-relative path"}
+PATH = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Workspace-relative path, e.g. README.md; omit the workspace folder prefix.",
+}
 READ_FILE_PARAMETERS = object_schema(
     {
         "path": PATH,
@@ -103,27 +106,6 @@ SPECS = [
         READ_FILE_PARAMETERS,
     ),
     ToolSpec(
-        "read_files",
-        "Read the whole repository recursively in one call with {} or path='.'. "
-        "Alternatively, supply files for known paths or line ranges. Available once per task; "
-        "reuse the result, then use read_file for changed or omitted content. "
-        "Protected files, symlinks and dependency/cache directories are excluded. "
-        "Results share the output limit and report truncation.",
-        object_schema(
-            {
-                "path": {**PATH, "description": "Directory to read recursively; defaults to '.'"},
-                "files": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 10000,
-                    "uniqueItems": True,
-                    "items": READ_FILE_PARAMETERS,
-                },
-            },
-        )
-        | {"not": {"required": ["path", "files"]}},
-    ),
-    ToolSpec(
         "search_files",
         "Find literal text in workspace files and return matching lines.",
         object_schema(
@@ -137,14 +119,18 @@ SPECS = [
     ),
     ToolSpec(
         "write_file",
-        "Create or replace a UTF-8 file. Read existing files before replacing them.",
+        "Create a UTF-8 file, or replace one in full only when the task explicitly requests it. "
+        "Use small edit_file patches for refactoring and other changes to existing files. "
+        "Read existing files before replacing them.",
         object_schema({"path": PATH, "content": {"type": "string"}}, ["path", "content"]),
         "edit",
         RiskLevel.MEDIUM,
     ),
     ToolSpec(
         "edit_file",
-        "Replace one exact, unique text block in an existing UTF-8 file.",
+        "Apply a small patch by replacing one exact, unique text block in an existing UTF-8 "
+        "file. Prefer this tool for refactoring and other changes to existing files; "
+        "read the relevant content first.",
         object_schema(
             {
                 "path": PATH,
@@ -273,7 +259,23 @@ class ToolRegistry:
         return candidate
 
     def _read_text(self, path: Path) -> str:
-        info = path.stat()
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            relative = path.relative_to(self.root)
+            message = (
+                f"File not found: {str(relative)!r}. Paths are relative to {str(self.root)!r}."
+            )
+            if relative.parts and relative.parts[0] == self.root.name:
+                suggested = Path(*relative.parts[1:])
+                try:
+                    corrected = self.resolve(str(suggested))
+                except ToolError:
+                    pass
+                else:
+                    if corrected.is_file():
+                        message += f" Use {str(suggested)!r}."
+            raise ToolError(message) from None
         if not stat.S_ISREG(info.st_mode):
             raise ToolError("Expected a regular text file")
         if info.st_size > MAX_FILE_BYTES:
@@ -351,8 +353,6 @@ class ToolRegistry:
                 return self.sanitize(result)
             if name == "run_command":
                 output = await self._run_command(**arguments)
-            elif name == "read_files":
-                return await self._read_files(**arguments)
             elif name in {"list_files", "read_file", "search_files"}:
                 output = await asyncio.to_thread(self._execute_file_tool, name, arguments)
             else:
@@ -369,128 +369,6 @@ class ToolRegistry:
         if len(text) > limit:
             text = text[:limit] + "\n[output truncated; request a narrower range]"
         return ToolResult(result.ok, text)
-
-    def _repository_files(self, path: str) -> list[dict[str, Any]]:
-        directory = self.resolve(path)
-        if not directory.is_dir():
-            raise ToolError("Expected a directory; use files for individual file paths")
-        return [
-            {"path": str(item.relative_to(self.root)), "end_line": MAX_FILE_BYTES}
-            for item in self._files(directory)
-        ]
-
-    async def _read_files(
-        self, files: list[dict[str, Any]] | None = None, path: str = "."
-    ) -> ToolResult:
-        if files is None:
-            files = await asyncio.to_thread(self._repository_files, path)
-        content_limit = self.settings.max_output_chars
-
-        async def read(arguments: dict[str, Any]) -> dict[str, Any]:
-            try:
-                output = await asyncio.to_thread(self._execute_file_tool, "read_file", arguments)
-                # Redact before any clipping so a shortened credential cannot leak a prefix.
-                result = {
-                    "ok": True,
-                    **{
-                        key: self.settings.redact(value) if isinstance(value, str) else value
-                        for key, value in output.items()
-                    },
-                }
-                if len(result["content"]) > content_limit:
-                    result["content"] = result["content"][:content_limit]
-                    result["truncated"] = result["has_more"] = True
-                return result
-            except (ToolError, OSError, UnicodeError, ValueError) as exc:
-                return {
-                    "path": self.settings.redact(arguments["path"]),
-                    "ok": False,
-                    "error": self.settings.redact(str(exc))[:400],
-                }
-
-        # A fixed worker pool avoids creating a task for every file in a large repository.
-        pending = iter(enumerate(files))
-        results: list[dict[str, Any]] = [{} for _ in files]
-        content_sizes: list[tuple[int, int]] = []
-        retained_chars = 0
-
-        async def worker() -> None:
-            nonlocal retained_chars
-            for index, arguments in pending:
-                results[index] = await read(arguments)
-                size = len(results[index].get("content", ""))
-                if size:
-                    heapq.heappush(content_sizes, (-size, index))
-                    retained_chars += size
-                # Keep retained content bounded without truncating files whose combined
-                # content fits. Shrink the largest entries first to share the budget.
-                while retained_chars > content_limit:
-                    negative_size, largest_index = heapq.heappop(content_sizes)
-                    size = -negative_size
-                    kept = max(size // 2, size - (retained_chars - content_limit))
-                    largest = results[largest_index]
-                    largest["content"] = largest["content"][:kept]
-                    largest["truncated"] = largest["has_more"] = True
-                    retained_chars -= size - kept
-                    if kept:
-                        heapq.heappush(content_sizes, (-kept, largest_index))
-
-        await asyncio.gather(*(worker() for _ in range(min(4, len(files)))))
-        total_files = len(results)
-        failed_files = sum(not result["ok"] for result in results)
-        truncated = any(result.get("has_more", False) for result in results)
-
-        def serialize() -> str:
-            return self.settings.redact(
-                json.dumps(
-                    {
-                        "files": results,
-                        "total_files": total_files,
-                        "failed_files": failed_files,
-                        "omitted_files": total_files - len(results),
-                        "truncated": truncated or len(results) < total_files,
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-        # If even metadata cannot fit, retain a bounded prefix and report exactly how many
-        # entries were omitted. Every discovered file has still been read once above.
-        full_results = results
-        results = [
-            {**result, "content": "", "truncated": True, "has_more": True}
-            if result.get("content")
-            else result
-            for result in full_results
-        ]
-        metadata_fits = len(serialize()) <= self.settings.max_output_chars
-        results = full_results
-        if not metadata_fits:
-            low, high = 0, len(results)
-            while low < high:
-                mid = (low + high + 1) // 2
-                results = full_results[:mid]
-                if len(serialize()) <= self.settings.max_output_chars:
-                    low = mid
-                else:
-                    high = mid - 1
-            results = full_results[:low]
-
-        text = serialize()
-        while len(text) > self.settings.max_output_chars:
-            candidates = [result for result in results if result.get("content")]
-            if not candidates:
-                return self.sanitize(
-                    ToolResult(False, "Repository summary exceeds the output limit; increase it.")
-                )
-            # Keep every file's metadata and valid JSON instead of clipping the last files away.
-            largest = max(candidates, key=lambda result: len(result["content"]))
-            largest["content"] = largest["content"][: len(largest["content"]) // 2]
-            largest["truncated"] = True
-            largest["has_more"] = True
-            truncated = True
-            text = serialize()
-        return ToolResult(failed_files == 0, text)
 
     def _execute_file_tool(self, name: str, args: dict[str, Any]) -> Any:
         if name == "finish":

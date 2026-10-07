@@ -9,7 +9,8 @@ from agent_tui.config import Settings
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(workspace=tmp_path, api_key="test-credential", max_steps=4)
+    # Existing routing tests explicitly exercise the retained per-tool mode.
+    return Settings(workspace=tmp_path, api_key="test-credential", max_steps=4, code_mode=False)
 
 
 @pytest.fixture

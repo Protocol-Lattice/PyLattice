@@ -13,19 +13,25 @@ async def check_connection(settings: Settings) -> bool:
     if not settings.api_key:
         print("Missing OPENROUTER_API_KEY. Set it in the environment or workspace .env.")
         return False
-    print(f"Decision model: {settings.router_model}", flush=True)
-    async with OpenRouterJevProvider(
-        api_key=settings.api_key, model=settings.router_model
-    ) as router:
-        try:
-            decision = await router.choose(
-                state="User says hello. No workspace actions are needed.",
-                instructions="Choose the appropriate next action.",
-                criteria={"finish": "Reply to the greeting", "read_file": "Read a project file"},
-            )
-            print(f"  OK: {decision.choice} ({decision.confidence:.0%})", flush=True)
-        except Exception as exc:
-            print(f"  Fallback: {settings.redact(str(exc))}", flush=True)
+    if settings.code_mode:
+        print("Code Mode: planner and decision model are not used.", flush=True)
+    else:
+        print(f"Decision model: {settings.router_model}", flush=True)
+        async with OpenRouterJevProvider(
+            api_key=settings.api_key, model=settings.router_model
+        ) as router:
+            try:
+                decision = await router.choose(
+                    state="User says hello. No workspace actions are needed.",
+                    instructions="Choose the appropriate next action.",
+                    criteria={
+                        "finish": "Reply to the greeting",
+                        "read_file": "Read a project file",
+                    },
+                )
+                print(f"  OK: {decision.choice} ({decision.confidence:.0%})", flush=True)
+            except Exception as exc:
+                print(f"  Fallback: {settings.redact(str(exc))}", flush=True)
     print(f"Executor: {settings.model}", flush=True)
     executor = OpenRouterExecutor(settings)
 

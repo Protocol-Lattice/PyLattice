@@ -267,3 +267,123 @@ async def test_shape_error_after_tokens_is_not_retried(settings):
         with pytest.raises(ExecutorError, match="could not normalize"):
             await OpenRouterExecutor(settings, client).complete([], [], None, ignore_token)
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"choices": [{"delta": {}, "finish_reason": "error"}]},
+        {"error": {"code": 503, "message": "Provider unavailable"}},
+        {"choices": [{"delta": {}}]},
+    ],
+)
+async def test_interrupted_generation_retries_without_partial_tool_calls(
+    settings, monkeypatch, failure
+):
+    requests = []
+
+    async def no_sleep(_):
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return stream_response(
+                [
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "partial",
+                                            "function": {
+                                                "name": "execute_code",
+                                                "arguments": '{"code":"await call_tool(',
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    failure,
+                ]
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "complete",
+                                    "function": {
+                                        "name": "finish",
+                                        "arguments": '{"summary":"Done"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await OpenRouterExecutor(settings, client).complete([], [], None, ignore_token)
+    assert [(call.id, call.name) for call in result.calls] == [("complete", "finish")]
+    assert len(requests) == 2
+    assert requests[0]["stream"] and not requests[1]["stream"]
+    assert "stream_options" not in requests[1]
+
+
+async def test_interrupted_generation_retries_are_bounded_and_diagnostic_redacted(
+    settings, monkeypatch
+):
+    requests = []
+
+    async def no_sleep(_):
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    def handler(request):
+        requests.append(request)
+        return stream_response([{"error": {"code": 503, "message": settings.api_key}}])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ExecutorError, match="after 3 attempt") as exc:
+            await OpenRouterExecutor(settings, client).complete([], [], None, ignore_token)
+    assert len(requests) == 3
+    assert settings.api_key not in str(exc.value)
+    assert "different --model" in str(exc.value)
+
+
+async def test_interruption_after_visible_text_is_not_retried(settings):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return stream_response(
+            [
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": "Partial"},
+                            "finish_reason": "error",
+                        }
+                    ]
+                }
+            ]
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ExecutorError, match="No tool from the incomplete response"):
+            await OpenRouterExecutor(settings, client).complete([], [], None, ignore_token)
+    assert len(requests) == 1

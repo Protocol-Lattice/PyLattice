@@ -26,6 +26,7 @@ class Settings:
     skills_dirs: tuple[Path, ...] = ()
     extensions_path: Path | None = None
     max_tokens: int = 4096
+    code_mode: bool = True
     planning: bool = True
     routing: str = "mcts"
     mcts_simulations: int = 64
@@ -58,7 +59,7 @@ class Settings:
             raise ValueError("Model names cannot be empty")
         if self.routing not in {"jev", "mcts"}:
             raise ValueError("routing must be jev or mcts")
-        if self.routing == "mcts" and not self.planning:
+        if not self.code_mode and self.routing == "mcts" and not self.planning:
             raise ValueError("MCTS needs the planner; remove --no-planner")
         if not 1 <= self.mcts_simulations <= 1024 or not 1 <= self.mcts_depth <= 5:
             raise ValueError("MCTS needs 1–1024 simulations and depth 1–5")
@@ -85,6 +86,8 @@ class Settings:
             "max_steps": int(os.getenv("AGENT_TUI_MAX_STEPS", "24")),
             "command_timeout": float(os.getenv("AGENT_TUI_COMMAND_TIMEOUT", "60")),
             "routing": os.getenv("AGENT_TUI_ROUTING", "mcts"),
+            "code_mode": os.getenv("AGENT_TUI_CODE_MODE", "true").strip().lower()
+            not in {"0", "false", "no", "off"},
             "context_chars": int(os.getenv("AGENT_TUI_CONTEXT_CHARS", str(DEFAULT_CONTEXT_CHARS))),
         }
         values.update({key: value for key, value in overrides.items() if value is not None})

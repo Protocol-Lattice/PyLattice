@@ -117,7 +117,7 @@ class AgentApp(App):
                 DemoExecutor(settings.workspace) if settings.demo else OpenRouterExecutor(settings)
             )
             planner = None
-            if settings.planning:
+            if settings.planning and not settings.code_mode:
                 planner = DemoPlanner() if settings.demo else Planner(executor, settings.mcts_depth)
             self.agent = Agent(settings, router, executor, planner=planner)
         self._worker: Worker | None = None
@@ -132,14 +132,22 @@ class AgentApp(App):
         self._stream_text = ""
         self._stream_rendered = ""
         self._stream_updated = 0.0
-        self._tool_cards: dict[int, tuple[Collapsible, Static, str]] = {}
+        self._tool_cards: dict[tuple[int, int], tuple[Collapsible, Static, str]] = {}
         self._subagent_cards: dict[str, tuple[Collapsible, Static, str]] = {}
         self.transcript: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="masthead"):
             yield Static("✦  Agent TUI", id="brand")
-            mode = "OFFLINE DEMO" if self.settings.demo else "HARNESS ROUTER × OPENROUTER"
+            mode = (
+                "OFFLINE DEMO"
+                if self.settings.demo
+                else (
+                    "CODE MODE × OPENROUTER"
+                    if self.settings.code_mode
+                    else "HARNESS ROUTER × OPENROUTER"
+                )
+            )
             yield Static(mode, id="stack-label")
         with Horizontal(id="workspace-bar"):
             yield Static(str(self.settings.workspace), id="workspace", markup=False)
@@ -166,14 +174,18 @@ class AgentApp(App):
                 yield Static("EXECUTION", classes="section-title")
                 yield Static("● Idle", id="phase", markup=False)
                 method = (
-                    f"MCTS · {self.settings.mcts_simulations} simulations"
+                    "Code Mode · Python tool programs"
+                    if self.settings.code_mode
+                    else f"MCTS · {self.settings.mcts_simulations} simulations"
                     if self.settings.routing == "mcts"
                     else "Jev · direct routing"
                 )
                 yield Static(method, id="routing-mode", markup=False)
                 yield Static("DECISION MODEL", classes="field-label")
                 yield Static(
-                    "offline/demo" if self.settings.demo else self.settings.router_model,
+                    "Not used in Code Mode"
+                    if self.settings.code_mode
+                    else ("offline/demo" if self.settings.demo else self.settings.router_model),
                     id="router-model",
                     markup=False,
                 )
@@ -381,12 +393,14 @@ class AgentApp(App):
             await self.query_one("#conversation", VerticalScroll).mount(card)
             self.transcript.append(("MCTS", text))
             self._log(f"MCTS · {event.data['simulations']} simulations", "accent")
-        elif event.kind == "routing":
+        elif event.kind in {"routing", "code_mode"}:
             await self._flush_stream(force=True)
-            phase.update("● Routing")
+            phase.update("● Composing code" if event.kind == "code_mode" else "● Routing")
             self._stream_card, self._stream_text = None, ""
             self._stream_rendered = ""
-            self._log(f"Step {event.step} · routing")
+            self._log(f"Step {event.step} · {event.text}")
+            if event.kind == "code_mode":
+                self.query_one("#next-tool", Static).update("execute_code or finish")
         elif event.kind == "route":
             if event.data["fallback"]:
                 detail = f"Fallback · {event.data['reason']}"
@@ -415,7 +429,7 @@ class AgentApp(App):
                 body, title=f"{event.step:02d}  {event.text}", collapsed=True, classes="tool-card"
             )
             await self.query_one("#conversation", VerticalScroll).mount(card)
-            self._tool_cards[event.step] = (card, body, arguments)
+            self._tool_cards[(event.step, event.data.get("call_id", 0))] = (card, body, arguments)
             self._log(f"Calling {event.text}")
             self._scroll()
         elif event.kind == "approval":
@@ -423,10 +437,15 @@ class AgentApp(App):
             self._log(f"Review {event.text}", "warning")
         elif event.kind == "tool_result":
             status = "done" if event.data["ok"] else "error"
-            if event.step in self._tool_cards:
-                card, body, arguments = self._tool_cards[event.step]
+            key = (event.step, event.data.get("call_id", 0))
+            if key in self._tool_cards:
+                card, body, arguments = self._tool_cards[key]
                 card.title += f"  ·  {status}"
                 body.update(f"ARGUMENTS\n{arguments}\n\nRESULT\n{event.text}")
+                if not event.data["ok"]:
+                    card.collapsed = False
+            elif not event.data["ok"]:
+                await self._message(f"TOOL ERROR / {event.data['tool']}", event.text, "notice")
             self.transcript.append((f"TOOL {event.data['tool']}", event.text))
             self._log(
                 f"{event.data['tool']} · {status}", "success" if event.data["ok"] else "error"
@@ -510,7 +529,9 @@ class AgentApp(App):
                 "`/quit` close the application\n\n"
                 "**Esc** stop · **Ctrl+N** new chat · **Ctrl+S** save\n\n"
                 "Writes and commands require approval unless `--yes` is set. "
-                "Use `--read-only` to omit those tools.",
+                "Use `--read-only` to omit those tools. "
+                "Code Mode batches tools in Python by default; `--no-code-mode` uses "
+                "per-tool routing.",
                 "notice",
             )
         else:

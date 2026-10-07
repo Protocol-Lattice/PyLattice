@@ -38,6 +38,54 @@ async def test_offline_demo_completes_planning_mcts_and_narrow_layout(settings):
         await pilot.press("ctrl+c")
 
 
+async def test_code_mode_demo_renders_each_nested_result_without_planning(settings):
+    app = AgentApp(replace(settings, demo=True, code_mode=True))
+    async with app.run_test(size=(120, 42)) as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        assert not app._busy
+        assert "Completed" in str(app.query_one("#phase", Static).render())
+        assert "Code Mode" in str(app.query_one("#routing-mode", Static).render())
+        assert not any(role in {"PLAN", "MCTS"} for role, _ in app.transcript)
+        assert [role for role, _ in app.transcript if role.startswith("TOOL ")] == [
+            "TOOL list_files",
+            "TOOL execute_code",
+            "TOOL finish",
+        ]
+        assert len(app._tool_cards) == 3
+        assert all("done" in str(card.title) for card, _, _ in app._tool_cards.values())
+
+
+async def test_failed_code_is_expanded_with_its_own_result(settings):
+    app = AgentApp(replace(settings, code_mode=True))
+    async with app.run_test():
+        for name, call_id in [("execute_code", 1), ("read_file", 2)]:
+            await app._event(
+                AgentEvent("tool_start", name, step=1, data={"call_id": call_id, "arguments": {}})
+            )
+        await app._event(
+            AgentEvent(
+                "tool_result",
+                "read failed",
+                step=1,
+                data={"tool": "read_file", "call_id": 2, "ok": False},
+            )
+        )
+        await app._event(
+            AgentEvent(
+                "tool_result",
+                "program stopped",
+                step=1,
+                data={"tool": "execute_code", "call_id": 1, "ok": False},
+            )
+        )
+        outer, outer_body, _ = app._tool_cards[(1, 1)]
+        inner, inner_body, _ = app._tool_cards[(1, 2)]
+        assert not outer.collapsed and not inner.collapsed
+        assert "program stopped" in str(outer_body.render())
+        assert "read failed" in str(inner_body.render())
+
+
 async def test_missing_key_is_reported_without_starting_a_run(settings):
     app = AgentApp(replace(settings, api_key=""))
     async with app.run_test() as pilot:

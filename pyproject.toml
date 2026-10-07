@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "python-agent-tui"
 version = "0.1.0"
-description = "A terminal execution layer with Harness Router decisions and an OpenRouter executor"
+description = "A terminal agent with sandboxed Code Mode, Harness Router, and OpenRouter execution"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,6 +13,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",
   "mcp>=1.12,<2",
+  "pydantic-monty>=1.1,<2",
   "python-dotenv>=1.0,<2",
   "pyyaml>=6,<7",
   "textual>=1.0,<7",

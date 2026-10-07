@@ -23,6 +23,10 @@ class _ResponseShapeError(ExecutorError):
     """An upstream streaming normalization failure; retry once without streaming."""
 
 
+class _InterruptedResponseError(ExecutorError):
+    """The provider ended generation before returning a complete, usable response."""
+
+
 def response_text(content: Any) -> str:
     if content is None:
         return ""
@@ -42,9 +46,11 @@ def response_text(content: Any) -> str:
     raise ExecutorError("Expected text or text content blocks from the executor")
 
 
-def provider_error(message: str) -> ExecutorError:
+def provider_error(message: str, code: Any = None) -> ExecutorError:
     if "unsupported response content shape" in message.casefold():
         return _ResponseShapeError(message[:500])
+    if str(code) in {"408", "429", "500", "502", "503", "504"}:
+        return _InterruptedResponseError(message[:500])
     return ExecutorError(message[:500])
 
 
@@ -87,7 +93,9 @@ class _Accumulator:
             message = (
                 error.get("message", "Stream error") if isinstance(error, dict) else str(error)
             )
-            raise provider_error(str(message))
+            raise provider_error(
+                str(message), error.get("code") if isinstance(error, dict) else None
+            )
         self.model = payload.get("model") or self.model
         usage = payload.get("usage") or {}
         if isinstance(usage.get("total_tokens"), int):
@@ -126,6 +134,10 @@ class _Accumulator:
             raise ExecutorError(
                 "Executor reached its token limit; no tool was executed. Retry a "
                 "smaller task or increase max_tokens in Settings."
+            )
+        if self.finish_reason in {None, "error"}:
+            raise _InterruptedResponseError(
+                f"Provider generation interrupted ({self.finish_reason or 'stream ended'})"
             )
         if self.finish_reason not in {"stop", "tool_calls", "function_call"}:
             raise ExecutorError(
@@ -196,6 +208,20 @@ class OpenRouterExecutor:
                     continue
                 raise ExecutorError(
                     "OpenRouter could not normalize the model response. "
+                    "Retry or choose a different --model. " + self.settings.redact(str(exc))
+                ) from None
+            except _InterruptedResponseError as exc:
+                # Tool calls are only dispatched after a complete response. Discard the
+                # failed accumulator, preserving earlier executed actions in messages.
+                # Once text is visible, stop rather than concatenate two responses.
+                if not emitted and attempt < 2:
+                    payload["stream"] = False
+                    payload.pop("stream_options", None)
+                    await asyncio.sleep(2**attempt)
+                    continue
+                raise ExecutorError(
+                    f"OpenRouter generation failed after {attempt + 1} attempt(s). "
+                    "No tool from the incomplete response was executed. "
                     "Retry or choose a different --model. " + self.settings.redact(str(exc))
                 ) from None
             except _RetryableStatus as exc:

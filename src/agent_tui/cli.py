@@ -13,12 +13,26 @@ from .config import DEFAULT_CONTEXT_CHARS, Settings
 
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(
-        description="Agentic Python TUI — Harness Router decisions, OpenRouter execution"
+        description="Agentic Python TUI — Code Mode with OpenRouter execution"
     )
     cli.add_argument("--version", action="version", version=f"agent-tui {__version__}")
     cli.add_argument("--workspace", type=Path, default=Path.cwd(), help="Workspace (default: cwd)")
     cli.add_argument("--model", help="Executor model (default: openrouter/free)")
     cli.add_argument("--router-model", help="Decision model (default: typesafe/jev-1.13)")
+    modes = cli.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--code-mode",
+        dest="code_mode",
+        action="store_true",
+        default=None,
+        help="Compose tool calls in sandboxed Python without routing/planning requests (default)",
+    )
+    modes.add_argument(
+        "--no-code-mode",
+        dest="code_mode",
+        action="store_false",
+        help="Use the previous per-tool Harness Router loop",
+    )
     cli.add_argument(
         "--fast",
         action="store_true",
@@ -76,11 +90,15 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     cli = parser()
     args = cli.parse_args()
+    if args.code_mode and (args.fast or args.routing or args.planning is False):
+        cli.error("--code-mode cannot be combined with per-tool routing or planning options")
     if args.fast:
         if args.routing == "mcts":
             cli.error("--fast cannot be combined with --routing mcts or --route-mcts")
         args.routing = "jev"
         args.planning = False
+    if args.fast or args.routing or args.planning is False:
+        args.code_mode = False
     workspace = args.workspace.expanduser().resolve()
     load_dotenv(workspace / ".env", override=False)
     try:
@@ -93,6 +111,7 @@ def main() -> None:
             read_only=args.read_only,
             auto_approve=args.auto_approve,
             demo=args.demo,
+            code_mode=args.code_mode,
             planning=args.planning,
             routing=args.routing,
             mcts_simulations=args.mcts_simulations,

@@ -64,6 +64,25 @@ class DemoExecutor:
         selected: str | None,
         on_token: TokenSink,
     ) -> Completion:
+        code_mode = any(s["function"]["name"] == "execute_code" for s in schemas)
+        has_result = messages[-1].get("role") == "tool"
+        if code_mode and not has_result:
+            return Completion(
+                calls=[
+                    ToolCall(
+                        "demo_code",
+                        "execute_code",
+                        json.dumps(
+                            {
+                                "code": 'result = await call_tool("list_files", '
+                                '{"max_entries": 12})\n'
+                                'result["output"]',
+                            }
+                        ),
+                    )
+                ],
+                model="offline/demo",
+            )
         if selected == "list_files":
             for chunk in ["I’ll inspect ", "the workspace ", "using the local file tool."]:
                 await on_token(chunk)
@@ -79,7 +98,7 @@ class DemoExecutor:
         summary = (
             f"Offline demonstration complete in `{self.workspace.name}`.\n\n"
             f"The real `list_files` tool returned:\n\n```json\n{output}\n```\n\n"
-            "Routing and model responses were simulated; no API was contacted. "
+            "Model responses were simulated; no API was contacted. "
             "Restart without `--demo` and set `OPENROUTER_API_KEY` to execute your tasks."
         )
         return Completion(

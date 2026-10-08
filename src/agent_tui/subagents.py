@@ -137,8 +137,10 @@ class SubagentManager:
         try:
             child = self.factory()
             # Enforce the same boundary even when a custom factory is supplied.
-            child.registry.unregister("delegate_tasks")
-            child.subagents = None
+            if hasattr(child, "registry"):
+                child.registry.unregister("delegate_tasks")
+            if hasattr(child, "subagents"):
+                child.subagents = None
             goal = f"Parent task: {self.parent_goal}\n\nYour assigned task: {task['prompt']}" + (
                 f"\n\nContext supplied by the parent:\n{task['context']}"
                 if task.get("context")

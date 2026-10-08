@@ -20,11 +20,8 @@ from textual.worker import Worker
 
 from .agent import Agent
 from .config import Settings
-from .demo import DemoExecutor, DemoPlanner, DemoRouter
 from .models import AgentEvent
-from .openrouter import OpenRouterExecutor
-from .planner import Planner
-from .routing import HarnessDecisionLayer
+from .mods import create_agent
 from .tools import ToolError
 
 
@@ -109,17 +106,7 @@ class AgentApp(App):
         self.theme = "jev-pink"
         self.settings = settings
         self.initial_prompt = initial_prompt
-        if agent:
-            self.agent = agent
-        else:
-            router = DemoRouter() if settings.demo else HarnessDecisionLayer(settings)
-            executor = (
-                DemoExecutor(settings.workspace) if settings.demo else OpenRouterExecutor(settings)
-            )
-            planner = None
-            if settings.planning and not settings.code_mode:
-                planner = DemoPlanner() if settings.demo else Planner(executor, settings.mcts_depth)
-            self.agent = Agent(settings, router, executor, planner=planner)
+        self.agent = agent if agent is not None else create_agent(settings)
         self._worker: Worker | None = None
         self._busy = False
         self._closed = False
@@ -211,7 +198,7 @@ class AgentApp(App):
     async def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
         self.set_interval(0.2, self._update_elapsed)
-        if not self.settings.demo and not self.settings.api_key:
+        if self.agent.requires_api_key and not self.settings.api_key:
             await self._message(
                 "SETUP",
                 "Set `OPENROUTER_API_KEY` in your environment or `.env` "
@@ -267,7 +254,7 @@ class AgentApp(App):
                 return
             await self._command(goal)
             return
-        if not self.settings.demo and not self.settings.api_key:
+        if self.agent.requires_api_key and not self.settings.api_key:
             await self._message(
                 "SETUP",
                 "Missing `OPENROUTER_API_KEY`. Set it and restart, or launch with `--demo`.",

@@ -149,6 +149,25 @@ See [extensions documentation](docs/extensions.md) for full configuration detail
 
 ---
 
+## Harness Mods
+
+Replace any agent component through Python factories: the app, agent, run loop, providers,
+prompts, code runtime, tools, policies, responses, context, memory, skills, plugins,
+middleware, MCP, and delegation. Components can extend a built-in or replace it completely.
+Child agents use the same mods with fresh instances.
+
+```bash
+uv run agent-tui --mods examples/mods.toml   # Working offline customization example
+uv run agent-tui --mods my-mods.toml --mod executor=my_package:build_executor
+uv run agent-tui --list-mods                # Inspect selection without importing mods
+```
+
+See [the mod guide](docs/mods.md) for every slot, factory contracts, configuration, and
+lifecycle handling. Mods are explicitly selected trusted Python code; no manifest is
+required to use the defaults.
+
+---
+
 ## Project Structure
 
 ```
@@ -156,6 +175,12 @@ See [extensions documentation](docs/extensions.md) for full configuration detail
 ├── src/agent_tui/           # Main TUI agent source code
 │   ├── __main__.py          # Entry point
 │   ├── cli.py               # Command-line interface
+│   ├── mods.py              # Mod loading, composition and lifecycle
+│   ├── defaults.py          # Built-in component factories
+│   ├── contracts.py         # Public component protocols
+│   ├── loop.py              # Replaceable default orchestration
+│   ├── prompts.py           # Replaceable prompt composition
+│   ├── policy.py            # Replaceable tool execution policy
 │   ├── codemode.py          # Sandboxed Python execution and tool bridge
 │   ├── routing.py           # Harness Router next-tool decision logic
 │   ├── tools.py             # Tools available to the agent

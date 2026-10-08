@@ -208,7 +208,13 @@ def adapt_tool_calls(completion: Completion, registry: ToolRegistry) -> Completi
     )
 
 
-async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> ToolResult:
+async def execute_code(
+    code: str,
+    settings: Settings,
+    run_tool: ToolRunner,
+    *,
+    format_result: Callable[[ToolResult], dict[str, Any]] = ToolResult.as_dict,
+) -> ToolResult:
     """Expose only a JSON tool bridge; never share host objects, mounts or OS handlers."""
     if not code.strip() or len(code) > MAX_CODE_CHARS:
         raise ToolError(f"Code must contain 1–{MAX_CODE_CHARS} characters")
@@ -245,7 +251,7 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
                     entry = {"tool": name, "ok": False}
                     calls.append(entry)
                     result = await run_tool(name, arguments)
-                    reply = result.as_dict()
+                    reply = format_result(result)
                     entry["ok"] = result.ok
                     if not result.ok:
                         entry["error"] = reply["error"]

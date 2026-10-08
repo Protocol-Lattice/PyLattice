@@ -280,9 +280,16 @@ class ToolRegistry:
         self.handlers[spec.name] = handler
 
     def unregister(self, name: str) -> None:
-        if name in self.handlers:
-            self.handlers.pop(name)
-            self.specs.pop(name)
+        self.handlers.pop(name, None)
+        self.specs.pop(name, None)
+
+    def replace(
+        self, spec: ToolSpec, handler: Callable[[dict[str, Any]], Awaitable[ToolResult]]
+    ) -> None:
+        """Replace a tool, including a built-in, without exposing a disallowed risk level."""
+        Draft202012Validator.check_schema(spec.parameters)
+        self.unregister(spec.name)
+        self.register(spec, handler)
 
     def descriptors(self) -> list[ToolDescriptor]:
         return [spec.descriptor() for spec in self.specs.values()]
@@ -407,6 +414,9 @@ class ToolRegistry:
         return path, old, new
 
     def preview(self, name: str, arguments: dict[str, Any]) -> str:
+        if name in self.handlers:
+            # A replacement may use a different schema and implementation from the built-in.
+            return json.dumps(arguments, ensure_ascii=False, indent=2)
         if name in {"write_file", "edit_file"}:
             path, old, new = self._replacement(name, arguments)
             relative = str(path.relative_to(self.root))

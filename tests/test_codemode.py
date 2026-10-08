@@ -783,7 +783,9 @@ async def test_chat_reply_and_sandbox_bridge_share_the_same_response_shape(setti
 
     registry.register(ToolSpec("example", "Example", object_schema({})), handler)
     tool_result = await registry.execute("example", {})
-    message = Agent._tool_message(ToolCall("example", "example", "{}"), tool_result)
+    from agent_tui.defaults import DefaultResponses
+
+    message = DefaultResponses().message(ToolCall("example", "example", "{}"), tool_result)
     chat_reply = json.loads(message["content"])
     code_result = await execute_code('await call_tool("example", {})', settings, registry.execute)
     assert code_result.ok, code_result.content

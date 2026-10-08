@@ -25,6 +25,8 @@ class Settings:
     memory_enabled: bool = True
     skills_dirs: tuple[Path, ...] = ()
     extensions_path: Path | None = None
+    mods_path: Path | None = None
+    mod_overrides: tuple[str, ...] = ()
     max_tokens: int = 4096
     code_mode: bool = True
     planning: bool = True
@@ -47,6 +49,10 @@ class Settings:
                 self,
                 "extensions_path",
                 (self.workspace / self.extensions_path.expanduser()).resolve(),
+            )
+        if self.mods_path is not None:
+            object.__setattr__(
+                self, "mods_path", (self.workspace / Path(self.mods_path).expanduser()).resolve()
             )
         # Accept the spelling sometimes used for the free router, but send the real API ID.
         model = self.model.strip()
@@ -89,6 +95,9 @@ class Settings:
             "code_mode": os.getenv("AGENT_TUI_CODE_MODE", "true").strip().lower()
             not in {"0", "false", "no", "off"},
             "context_chars": int(os.getenv("AGENT_TUI_CONTEXT_CHARS", str(DEFAULT_CONTEXT_CHARS))),
+            "mods_path": Path(os.environ["AGENT_TUI_MODS"])
+            if os.getenv("AGENT_TUI_MODS")
+            else None,
         }
         values.update({key: value for key, value in overrides.items() if value is not None})
         return cls(**values)

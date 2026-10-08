@@ -157,6 +157,8 @@ class _Accumulator:
 
 
 class OpenRouterExecutor:
+    requires_api_key = True
+
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
         self.settings = settings
         self._owns_client = client is None

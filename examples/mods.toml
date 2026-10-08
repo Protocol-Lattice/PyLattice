@@ -1,0 +1,16 @@
+version = 1
+
+# Paths resolve relative to this manifest, even with a different --workspace.
+# These offline providers still run the real agent loop, policies and tools.
+[mods]
+router = "harness_mods.py:build_router"
+executor = "harness_mods.py:build_executor"
+planner = "none"
+prompts = "harness_mods.py:build_prompts"
+tools = "harness_mods.py:build_tools"
+
+[options.prompts]
+instructions = "Explain which observations support your answer."
+
+[options.tools]
+label = "My modded workspace"

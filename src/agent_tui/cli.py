@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .config import DEFAULT_CONTEXT_CHARS, Settings
+from .mods import HarnessMods, ModRuntime
 
 
 def parser() -> argparse.ArgumentParser:
@@ -65,6 +66,21 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument(
         "--extensions", type=Path, help="MCP/hook TOML (default: .agent-tui/extensions.toml)"
     )
+    cli.add_argument(
+        "--mods", type=Path, help="Harness mods TOML (imports trusted Python factories)"
+    )
+    cli.add_argument(
+        "--mod",
+        action="append",
+        default=[],
+        metavar="SLOT=FACTORY",
+        help="Override a mod with module:factory, path.py:factory, default, or none (repeatable)",
+    )
+    cli.add_argument(
+        "--list-mods",
+        action="store_true",
+        help="Print configured mod slots without importing custom code",
+    )
     cli.add_argument("--skills-dir", action="append", type=Path, help="Additional skill directory")
     cli.add_argument(
         "--no-memory",
@@ -118,22 +134,31 @@ def main() -> None:
             mcts_depth=args.mcts_depth,
             context_chars=args.context_chars,
             extensions_path=args.extensions,
+            mods_path=args.mods,
+            mod_overrides=tuple(args.mod),
             skills_dirs=tuple(args.skills_dir or ()),
             memory_enabled=args.memory_enabled,
         )
+        mods = HarnessMods.load(settings)
     except ValueError as exc:
         cli.error(str(exc))
     # The TUI reports routing failures; keep upstream traceback logging off the terminal.
     logging.getLogger("harness_router").addHandler(logging.NullHandler())
     logging.getLogger("harness_router").propagate = False
+    if args.list_mods:
+        for name, target in mods.describe().items():
+            print(f"{name} = {target}")
+        return
     if args.check:
         from .diagnostics import check_connection
 
-        raise SystemExit(0 if asyncio.run(check_connection(settings)) else 1)
-    from .tui import AgentApp
+        raise SystemExit(0 if asyncio.run(check_connection(settings, mods)) else 1)
 
+    runtime = ModRuntime(settings, mods, initial_prompt=args.prompt)
     try:
-        app = AgentApp(settings, initial_prompt=args.prompt)
+        app = runtime.get("app")
+        app.run()
     except ValueError as exc:
-        cli.error(str(exc))
-    app.run()
+        cli.error(settings.redact(str(exc)))
+    finally:
+        asyncio.run(runtime.aclose())

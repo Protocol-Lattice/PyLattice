@@ -7,8 +7,17 @@ import sys
 from dataclasses import replace
 
 import pytest
+from harness_router import RiskLevel
+from jsonschema.exceptions import SchemaError
 
-from agent_tui.tools import ToolError, ToolFailure, ToolRegistry, ToolResult
+from agent_tui.tools import (
+    ToolError,
+    ToolFailure,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+    object_schema,
+)
 
 
 @pytest.mark.parametrize(
@@ -349,3 +358,53 @@ async def test_credentials_are_redacted_in_results(settings, tmp_path):
     result = await ToolRegistry(settings).execute("read_file", {"path": "log.txt"})
     assert settings.api_key not in result.content
     assert "[REDACTED]" in result.content
+
+
+async def test_builtin_tools_can_be_removed(settings):
+    tools = ToolRegistry(settings)
+    tools.unregister("run_command")
+    tools.unregister("run_command")
+    assert "run_command" not in tools.specs
+    assert "run_command" not in {item.name for item in tools.descriptors()}
+    assert tools.schemas("run_command") == []
+    result = await tools.execute("run_command", {"argv": ["never-run"]})
+    assert not result.ok and result.error.code == "unavailable_tool"
+
+
+async def test_replaced_builtin_can_change_schema_and_keeps_validation(settings):
+    tools = ToolRegistry(settings)
+    calls = []
+
+    async def custom(arguments):
+        calls.append(arguments)
+        return ToolResult(True, settings.api_key)
+
+    spec = ToolSpec(
+        "run_command",
+        "Send a named job to a custom runner",
+        object_schema({"job": {"type": "string"}}, ["job"]),
+        risk=RiskLevel.HIGH,
+    )
+    tools.replace(spec, custom)
+    assert tools.requires_approval("run_command")
+    assert json.loads(tools.preview("run_command", {"job": "check"})) == {"job": "check"}
+    invalid = await tools.execute("run_command", {"argv": ["not-accepted"]})
+    assert not invalid.ok and not calls
+    result = await tools.execute("run_command", {"job": "check"})
+    assert calls == [{"job": "check"}]
+    assert result.ok and result.content == "[REDACTED]"
+
+
+async def test_replacement_respects_readonly_and_invalid_schema_is_atomic(readonly_settings):
+    tools = ToolRegistry(readonly_settings)
+    old = tools.specs["read_file"]
+
+    async def handler(arguments):
+        pytest.fail("A disallowed replacement must not execute")
+
+    with pytest.raises(SchemaError):
+        tools.replace(replace(old, parameters={"type": "invalid-type"}), handler)
+    assert tools.specs["read_file"] is old
+    tools.replace(replace(old, risk=RiskLevel.HIGH), handler)
+    assert "read_file" not in tools.specs
+    assert not (await tools.execute("read_file", {"path": "x"})).ok

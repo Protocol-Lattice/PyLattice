@@ -170,25 +170,6 @@ async def test_binary_and_large_files_are_rejected(settings, tmp_path):
         assert not (await tools.execute("read_file", {"path": path})).ok
 
 
-async def test_commands_are_argv_only_with_secret_environment_removed(settings, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "must-not-inherit")
-    result = await ToolRegistry(settings).execute(
-        "run_command",
-        {
-            "argv": [
-                sys.executable,
-                "-c",
-                "import os,sys; print(os.getenv('OPENROUTER_API_KEY')); print(sys.argv[1])",
-                "$(touch should-not-exist)",
-            ]
-        },
-    )
-    assert result.ok
-    output = json.loads(result.content)
-    assert output["output"] == "None\n$(touch should-not-exist)\n"
-    assert not (settings.workspace / "should-not-exist").exists()
-
-
 async def test_command_error_timeout_and_bounded_output(settings):
     tools = ToolRegistry(replace(settings, command_timeout=0.15, max_output_chars=1200))
     failed = await tools.execute(

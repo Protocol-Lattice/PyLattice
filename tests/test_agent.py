@@ -162,7 +162,8 @@ async def test_removed_read_files_is_rejected_and_agent_can_continue(settings, t
     assert "read_files" not in {schema["function"]["name"] for schema in schemas}
     reply = json.loads(executor.requests[1][0][-1]["content"])
     assert not reply["ok"]
-    assert "Tool is not available: read_files" in reply["output"]
+    assert "Tool is not available: read_files" in reply["error"]["message"]
+    assert reply["error"]["code"] == "unavailable_tool" and reply["output"] is None
     assert "1: source" in executor.requests[2][0][-1]["content"]
 
 
@@ -323,7 +324,7 @@ async def test_cancel_during_approval_keeps_tool_history_valid(settings, tmp_pat
 
 
 def test_context_pruning_keeps_tool_exchanges_intact(settings):
-    agent = Agent(replace(settings, context_chars=2700), FakeRouter(), FakeExecutor())
+    agent = Agent(replace(settings, context_chars=3200), FakeRouter(), FakeExecutor())
     exchanges = []
     for i in range(6):
         exchange = [

@@ -11,7 +11,7 @@ import signal
 import stat
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,17 @@ MAX_FILE_BYTES = 1_000_000
 class ToolError(Exception):
     """An actionable error safe to feed back to the executor."""
 
+    def __init__(
+        self, message: str, *, code: str = "tool_error", retry_hint: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retry_hint = retry_hint
+
+
+def _reject_nonfinite(value: str) -> None:
+    raise ValueError(f"Non-finite JSON number: {value}")
+
 
 def object_schema(properties: dict[str, Any], required: list[str] | None = None) -> dict:
     return {
@@ -48,6 +59,28 @@ def object_schema(properties: dict[str, Any], required: list[str] | None = None)
         "required": required or [],
         "additionalProperties": False,
     }
+
+
+def bounded_json(payload: dict[str, Any], field: str, limit: int) -> str:
+    """Shorten one text/list field without cutting JSON escapes or list entries."""
+    payload = {**payload, "truncated": True}
+    value = payload[field]
+    payload[field] = value[:0]
+    text = json.dumps(payload, ensure_ascii=False)
+    if len(text) > limit:
+        # Even the metadata cannot fit. Preserve an explicit truncation signal whenever
+        # the configured budget permits it, rather than returning malformed JSON.
+        return '{"truncated":true}' if limit >= 18 else "0"
+    low, high = 0, len(value)
+    while low < high:
+        middle = (low + high + 1) // 2
+        payload[field] = value[:middle]
+        candidate = json.dumps(payload, ensure_ascii=False)
+        if len(candidate) <= limit:
+            low, text = middle, candidate
+        else:
+            high = middle - 1
+    return text
 
 
 PATH = {
@@ -172,9 +205,56 @@ SPECS = [
 
 
 @dataclass(frozen=True)
+class ToolFailure:
+    code: str
+    message: str
+    retry_hint: str | None = None
+
+
+@dataclass(frozen=True)
 class ToolResult:
     ok: bool
     content: str
+    error: ToolFailure | None = None
+    truncated: bool = False
+
+    @classmethod
+    def from_error(cls, error: Exception) -> ToolResult:
+        return cls(
+            False,
+            str(error),
+            ToolFailure(
+                error.code if isinstance(error, ToolError) else "tool_error",
+                str(error),
+                error.retry_hint if isinstance(error, ToolError) else None,
+            ),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """One model-facing envelope for both chat replies and the sandbox bridge."""
+        try:
+            output = json.loads(self.content, parse_constant=_reject_nonfinite)
+        except (ValueError, RecursionError):
+            output = self.content
+        error = self.error
+        if not self.ok:
+            if error is None:
+                message = (
+                    output.get("error", "Tool failed; inspect output for details.")
+                    if isinstance(output, dict)
+                    else self.content
+                )
+                error = ToolFailure("tool_error", str(message))
+            if isinstance(output, str):
+                output = None
+        return {
+            "ok": self.ok,
+            "output": output,
+            "error": asdict(error) if not self.ok and error else None,
+            "truncated": self.truncated
+            or isinstance(output, dict)
+            and output.get("truncated") is True,
+        }
 
 
 class ToolRegistry:
@@ -216,7 +296,7 @@ class ToolRegistry:
 
     def validate(self, name: str, raw_arguments: str) -> dict[str, Any]:
         if name not in self.specs:
-            raise ToolError(f"Tool is not available: {name}")
+            raise ToolError(f"Tool is not available: {name}", code="unavailable_tool")
         try:
             arguments = json.loads(raw_arguments)
             if not isinstance(arguments, dict):
@@ -224,7 +304,11 @@ class ToolRegistry:
             Draft202012Validator(self.specs[name].parameters).validate(arguments)
         except (ValueError, ValidationError) as exc:
             message = exc.message if isinstance(exc, ValidationError) else str(exc)
-            raise ToolError(f"Invalid arguments for {name}: {message[:400]}") from None
+            raise ToolError(
+                f"Invalid arguments for {name}: {message[:400]}",
+                code="invalid_arguments",
+                retry_hint="Use the current tool schema to correct the arguments.",
+            ) from None
         return arguments
 
     def requires_approval(self, name: str) -> bool:
@@ -351,7 +435,7 @@ class ToolRegistry:
             self.validate(name, json.dumps(arguments))
             if name in self.handlers:
                 result = await self.handlers[name](arguments)
-                return self.sanitize(result)
+                return self.sanitize(result, name)
             if name == "run_command":
                 output = await self._run_command(**arguments)
             elif name in {"list_files", "read_file", "search_files"}:
@@ -360,16 +444,59 @@ class ToolRegistry:
                 output = self._execute_file_tool(name, arguments)
             ok = not isinstance(output, dict) or output.get("exit_code", 0) == 0
             text = json.dumps(output, ensure_ascii=False)
+            error = None
+            if name == "run_command" and not ok:
+                error = ToolFailure(
+                    "command_timeout" if output["timed_out"] else "command_failed",
+                    "Command timed out."
+                    if output["timed_out"]
+                    else f"Command exited with status {output['exit_code']}.",
+                    "Inspect command output and current state before retrying.",
+                )
+            result = ToolResult(ok, text, error)
         except (ToolError, OSError, UnicodeError, ValueError) as exc:
-            ok, text = False, f"Tool error: {exc}"
-        return self.sanitize(ToolResult(ok, text))
+            result = ToolResult.from_error(exc)
+        return self.sanitize(result, name)
 
-    def sanitize(self, result: ToolResult) -> ToolResult:
+    def sanitize(self, result: ToolResult, name: str | None = None) -> ToolResult:
         text = self.settings.redact(result.content)
         limit = self.settings.max_output_chars
+        truncated = result.truncated or len(text) > limit
         if len(text) > limit:
-            text = text[:limit] + "\n[output truncated; request a narrower range]"
-        return ToolResult(result.ok, text)
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                marker = "\n[output truncated; request a narrower range]"
+                text = text[: max(0, limit - len(marker))] + marker[:limit]
+            else:
+                field = {
+                    "list_files": "files",
+                    "read_file": "content",
+                    "search_files": "matches",
+                    "run_command": "output",
+                }.get(name)
+                if (
+                    isinstance(payload, dict)
+                    and field is not None
+                    and isinstance(payload.get(field), (str, list))
+                ):
+                    if name == "read_file":
+                        payload["has_more"] = True
+                    text = bounded_json(payload, field, limit)
+                else:
+                    text = bounded_json({"output_excerpt": text}, "output_excerpt", limit)
+        error = result.error
+        if error is not None:
+            message = self.settings.redact(error.message)
+            hint = self.settings.redact(error.retry_hint) if error.retry_hint else None
+            truncated |= len(message) > limit or bool(hint and len(hint) > limit)
+            error = replace(
+                error,
+                code=self.settings.redact(error.code)[:100],
+                message=message[:limit],
+                retry_hint=hint[:limit] if hint else None,
+            )
+        return ToolResult(result.ok, text, error, truncated)
 
     def _execute_file_tool(self, name: str, args: dict[str, Any]) -> Any:
         if name == "finish":

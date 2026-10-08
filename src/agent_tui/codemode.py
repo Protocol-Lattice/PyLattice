@@ -7,64 +7,166 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic_monty import AsyncMonty, CollectString, MontyError
+from pydantic_monty import AsyncMonty, CollectString, MontyError, MontySyntaxError, MontyTypingError
 
 from .config import Settings
 from .models import Completion, ToolCall
-from .tools import ToolError, ToolRegistry, ToolResult, ToolSpec, object_schema
+from .tools import (
+    ToolError,
+    ToolFailure,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+    bounded_json,
+    object_schema,
+)
 
 MAX_CODE_CHARS = 24_000
 MAX_TOOL_CALLS = 32
 EXECUTION_SECONDS = 5.0
 MEMORY_BYTES = 64 * 1024 * 1024
 
+# The same bridge signature is given to the model and Monty's pre-execution checker.
+# Output varies by catalog tool; it is decoded JSON data or a plain text string.
+TOOL_BRIDGE_STUBS = """from typing import Any, TypedDict
+
+class ToolFailure(TypedDict):
+    code: str
+    message: str
+    retry_hint: str | None
+
+class ToolReply(TypedDict):
+    ok: bool
+    output: Any
+    error: ToolFailure | None
+    truncated: bool
+
+async def call_tool(name: str, arguments: dict[str, Any]) -> ToolReply: ...
+"""
+
 CODE_SPEC = ToolSpec(
     "execute_code",
     "Execute a sandboxed Python program to inspect files, apply needed edits or writes, "
     "and verify results. Continue with this tool after reading when requested changes remain. "
-    "Use await call_tool(name, arguments) and return the useful data as the final expression. "
+    "The code argument must be a raw Python source string, without Markdown fences or prose. "
+    "Use await call_tool(name, arguments) and return useful JSON data as the final expression. "
+    "Syntax and types are checked before any tool runs. "
     "Tool calls retain validation, hooks and approvals. A failed tool stops further calls. "
     "Host files are available only through call_tool, never Python open(). "
     "Programs are independent; variables do not persist between calls.",
     object_schema(
-        {"code": {"type": "string", "minLength": 1, "maxLength": MAX_CODE_CHARS}}, ["code"]
+        {
+            "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_CODE_CHARS,
+                "description": (
+                    "Raw Python source with top-level await call_tool(name, arguments). "
+                    "Use Python True, False and None, not JSON true, false and null. "
+                    "End with a JSON-compatible expression or print a short result. "
+                    "No Markdown fences, host imports, or asyncio.run wrapper."
+                ),
+            }
+        },
+        ["code"],
     ),
     "orchestrate",
 )
 
-CODE_PROMPT = """Use Code Mode to carry out related actions in one execute_code call.
-The decision model chooses execute_code or finish before each turn. Use the selected tool;
-on a routing fallback, choose either tool yourself. Write Python using variables, loops,
-conditions and comprehensions. No planning or routing model runs between calls inside a
-program. Call tools with await call_tool("name", {"argument": value}).
-Catalog names such as read_file and skill_search are call_tool arguments inside Python,
-not top-level function calls. The only top-level tools are execute_code and finish.
-The returned dict has ok and output; JSON tool output is already decoded, other output is
-a string. Calls execute serially, including calls scheduled with asyncio.gather.
-Return only useful evidence as the program's final expression, or use print for short output.
-Intermediate tool results stay in the program. Each program starts fresh; variables do not
-persist. Use a new program only when you need to reason about the previous result.
-After reading, apply changes needed for the user's task: use edit_file for small patches or
-write_file for new files, then read back the changed content to verify it. Do this in the same
-program when the change is clear; otherwise return the relevant content and continue with a
-new program after reasoning about it. Leave files unchanged when the task needs no changes.
-All workspace, command, MCP, skill and memory access must go through call_tool. The sandbox
-has no host filesystem or network access. Do not use open, subprocess or third-party packages.
-Each program permits at most 32 tool calls, 5 seconds of computation and 64 MiB of memory.
-Waiting for a tool or user approval does not consume the computation budget. On any tool
-failure, further tool calls in that program are blocked, even if you catch the exception.
-Earlier successful actions are not rolled back. Inspect current state before retrying.
-execute_code and finish cannot be called inside a program. Continue with execute_code while
-requested edits or verification remain. Use finish or answer directly only when the task is
-complete or needs a user answer. Use exactly one top-level tool call per response.
-Example:
+CODE_PROMPT = """Code Mode generation contract:
+1. The only top-level tools are execute_code and finish. For actions, emit exactly one tool
+call with arguments matching its JSON schema. Obey the selected tool for this turn.
+Catalog tools are available ONLY through call_tool inside execute_code; never emit them as
+top-level calls or call them as Python functions. Never nest execute_code or finish.
+2. execute_code arguments are {"code": "<Python source>"}. The code value is raw Python,
+not Markdown, explanatory prose, a JSON object, or a quoted/JSON-encoded second copy of the
+program. Escape quotes and newlines once in the outer JSON arguments. Inside Python use
+True, False and None; JSON true, false and null are not Python literals.
+3. Write a short, self-contained program with top-level await, variables, loops, conditions
+and comprehensions. Every call_tool must be awaited before using its result. Use exactly
+await call_tool("catalog_name", {"argument": value}); do not pass tool parameters as keyword
+arguments to call_tool or pass a JSON string instead of a dict. Use only names and argument
+keys from the current catalog, including required arguments and their exact types.
+4. This is the Monty Python subset. Prefer builtins, strings, lists and dicts. Do not import
+workspace modules or third-party packages. There is no host filesystem, environment or
+network access: do not use open, pathlib for file access, os, subprocess, requests or shell
+syntax. Use call_tool for all external actions. json, re and math support basic data work;
+do not assume the full Python standard library is available. No asyncio.run/main wrapper,
+create_task, background jobs, eval or exec. Serial awaits are simplest; asyncio.gather is
+supported but tool calls still execute serially. All variables and imports start fresh in
+each execute_code call. Syntax and type errors reject the program before tools execute.
+5. Tool replies share {"ok": bool, "output": data, "error": object_or_None,
+"truncated": bool}. output is already decoded; never json.loads an object again. Plain
+text output remains a string. error is None on success; otherwise it contains code,
+message and retry_hint. Check result["truncated"] before relying on partial data.
+MCP output has content (typed text/omission blocks) and structured_content (JSON or None).
+Inspect unknown extension data before assuming its shape. Failed tools raise an exception,
+and all later tool calls in that program are blocked even if you catch it. Do not write
+fallback actions in an except block to work around a tool failure or denied approval.
+6. Built-in output shapes (under result["output"]):
+   list_files: {"files": ["relative/path"], "truncated": bool}; entries are strings.
+   read_file: {"path": str, "content": str, "total_lines": int, "has_more": bool}.
+   content includes display prefixes like "12: text"; those prefixes are not file content.
+   search_files: {"matches": [{"path": str, "line": int, "text": str}],
+                  "truncated": bool, "skipped": int}; query is literal text, not regex.
+   edit_file/write_file: {"path": str, "bytes": int}.
+   run_command: {"exit_code": int, "output": str, "truncated": bool, "timed_out": bool}.
+Use result["output"]["content"] for file text and result["output"]["output"] for command
+text. Check has_more and optional flags with output.get("truncated", False); request smaller
+ranges before relying on an excerpt.
+Paths are workspace-relative. run_command takes an argv list, not a shell command string.
+7. End with a small JSON-compatible expression (dict, list, string, number, bool or None),
+or print short evidence. Do not end with only assignments, an unawaited coroutine, a set,
+bytes or a custom object. Do not use a top-level return. Intermediate results are not shown
+to the next model turn unless included in the final expression or printed.
+8. For changes, inspect source first, apply exact edit_file patches without line-number
+prefixes, and verify with a read or appropriate command. write_file is for new files or
+explicitly requested full replacements. Never reconstruct an entire file from a partial
+read. Batch a change only when it is clear; otherwise return the source and reason in the
+next turn. Continue using execute_code while requested edits or verification remain.
+9. Keep output and loops bounded. A program has at most 32 tool calls, 5 seconds of
+computation (excluding tools/approvals), 64 MiB memory and 24,000 source characters.
+On failure, read error, phase, tools and retry_hint. Correct the cause in a NEW program.
+Validation errors run no tools. Runtime errors may follow successful actions, which are
+not rolled back: inspect current state and never blindly replay earlier mutations.
+10. Use finish only when complete or essential user input is required. Report verification
+and blockers honestly. A direct final answer is allowed only when finish is selected or
+routing falls back and no work remains; never answer directly when execute_code is selected.
+
+Example Python source for bounded inspection:
 listing = await call_tool("list_files", {"path": "src"})
 results = []
 for path in listing["output"]["files"][:3]:
     result = await call_tool("read_file", {"path": path})
     results.append(result["output"])
-results
+{"files": results, "truncated": listing["output"]["truncated"]}
 """
+
+
+def code_mode_prompt(registry: ToolRegistry, selected: str | None) -> str:
+    catalog = [
+        schema["function"]
+        for schema in registry.schemas()
+        if schema["function"]["name"] not in {"execute_code", "finish"}
+    ]
+    instruction = {
+        "execute_code": (
+            "For this response, call execute_code exactly once with a code string. "
+            "Do not return a final answer or a finish call."
+        ),
+        "finish": "For this response, finish with a concise summary or essential question.",
+        None: "Routing fallback: choose execute_code or finish according to remaining work.",
+    }[selected]
+    return (
+        CODE_PROMPT
+        + "\nProvided bridge signature (already defined; do not redefine it):\n"
+        + TOOL_BRIDGE_STUBS
+        + "\ncall_tool catalog (JSON schemas, not Python source):\n"
+        + json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
+        + "\n"
+        + instruction
+    )
+
 
 ToolRunner = Callable[[str, dict[str, Any]], Awaitable[ToolResult]]
 
@@ -76,6 +178,8 @@ def adapt_tool_calls(completion: Completion, registry: ToolRegistry) -> Completi
         for call in completion.calls
     ):
         return completion
+    if len(completion.calls) > MAX_TOOL_CALLS:
+        raise ToolError(f"Code Mode permits at most {MAX_TOOL_CALLS} tool calls per program")
     lines = ["results = []"]
     for call in completion.calls:
         arguments = registry.validate(call.name, call.arguments)
@@ -115,9 +219,11 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
     callbacks: set[asyncio.Task] = set()
     printed = CollectString(max_bytes=settings.max_output_chars)
     output = None
+    phase = "runtime"
+    tool_failure: ToolFailure | None = None
 
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        nonlocal failure
+        nonlocal failure, tool_failure
         task = asyncio.current_task()
         if task is not None:
             callbacks.add(task)
@@ -139,16 +245,22 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
                     entry = {"tool": name, "ok": False}
                     calls.append(entry)
                     result = await run_tool(name, arguments)
+                    reply = result.as_dict()
                     entry["ok"] = result.ok
                     if not result.ok:
-                        raise ToolError(result.content)
-                    try:
-                        value = json.loads(result.content)
-                    except ValueError:
-                        value = result.content
-                    return {"ok": True, "output": value}
+                        entry["error"] = reply["error"]
+                        entry["output"] = reply["output"]
+                        tool_failure = ToolFailure(**reply["error"])
+                        raise ToolError(
+                            tool_failure.message,
+                            code=tool_failure.code,
+                            retry_hint=tool_failure.retry_hint,
+                        )
+                    return reply
                 except Exception as exc:
                     failure = settings.redact(str(exc) or type(exc).__name__)
+                    if tool_failure is None:
+                        tool_failure = ToolResult.from_error(exc).error
                     raise ToolError(failure) from None
         finally:
             if task is not None:
@@ -158,6 +270,9 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
         async with (
             AsyncMonty(max_processes=1, request_timeout=EXECUTION_SECONDS + 2) as pool,
             pool.checkout(
+                type_check=True,
+                type_check_stubs=TOOL_BRIDGE_STUBS,
+                type_check_format="concise",
                 limits={
                     "max_feed_duration_secs": EXECUTION_SECONDS,
                     "max_memory": MEMORY_BYTES,
@@ -171,9 +286,15 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
                 code, external_lookup={"call_tool": call_tool}, print_callback=printed
             )
     except (MontyError, ValueError, OSError) as exc:
+        if isinstance(exc, (MontySyntaxError, MontyTypingError)) and not calls:
+            phase = "validation"
         if not failure:
             failure = settings.redact(str(exc) or type(exc).__name__)
-            if isinstance(exc, MontyError) and isinstance(exc.exception(), PermissionError):
+            if isinstance(exc, MontyError) and (
+                isinstance(exc.exception(), PermissionError)
+                or isinstance(exc, MontyTypingError)
+                and "Name `open` used when not defined" in failure
+            ):
                 failure += (
                     "\nCode Mode cannot access host files directly. Read files with "
                     'await call_tool("read_file", {"path": "workspace-relative/path.py"}). '
@@ -186,23 +307,51 @@ async def execute_code(code: str, settings: Settings, run_tool: ToolRunner) -> T
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
 
+    try:
+        json.dumps(output, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        failure = failure or "Return JSON-compatible data from the final expression"
+        output = None
     payload = {"output": output, "stdout": printed.output, "tools": calls}
     if failure:
         payload["error"] = failure
-    try:
-        text = json.dumps(payload, ensure_ascii=False, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        failure = "Return JSON-compatible data from the final expression"
-        text = json.dumps({"error": failure, "tools": calls})
-    if len(text) > settings.max_output_chars:
-        text = json.dumps(
-            {
-                "output_excerpt": text[: settings.max_output_chars // 3],
-                "truncated": True,
-                "tool_calls": len(calls),
-                "error": failure[:160] if failure else None,
-            },
-            ensure_ascii=False,
+        payload["phase"] = phase
+        payload["retry_hint"] = (
+            "No tools ran. Fix the reported Python error and submit a new execute_code call. "
+            "Use raw Python without Markdown fences, await call_tool(name, arguments), "
+            "Python True/False/None, and a final JSON-compatible expression."
+            if phase == "validation"
+            else "Inspect the tools log and current state before retrying in a new program. "
+            "Earlier successful actions were not rolled back. Do not bypass denied approvals."
         )
+    text = settings.redact(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+    truncated = len(text) > settings.max_output_chars
+    if truncated:
+        summary = {
+            "output_excerpt": "",
+            "truncated": True,
+            "tools": calls,
+            "tool_calls": len(calls),
+        }
+        if failure:
+            summary.update(error=failure[:160], phase=phase, retry_hint=payload["retry_hint"])
+        if len(json.dumps(summary, ensure_ascii=False)) > settings.max_output_chars:
+            summary.update(tools=[], tools_truncated=True)
+        if failure and len(json.dumps(summary, ensure_ascii=False)) > settings.max_output_chars:
+            # Escaped diagnostics can use far more characters than their source text.
+            # Keep the phase and recovery guidance, shortening the error before excerpts.
+            text = bounded_json(summary, "error", settings.max_output_chars)
+        else:
+            summary["output_excerpt"] = text
+            text = bounded_json(summary, "output_excerpt", settings.max_output_chars)
     # The registry also applies its common output bound and credential redaction.
-    return ToolResult(not failure, text)
+    error = None
+    if failure:
+        error = ToolFailure(
+            tool_failure.code if tool_failure else f"code_{phase}_error",
+            failure,
+            tool_failure.retry_hint
+            if tool_failure and tool_failure.retry_hint
+            else payload["retry_hint"],
+        )
+    return ToolResult(not failure, text, error, truncated)

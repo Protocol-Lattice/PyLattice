@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import pytest
 
-from agent_tui.tools import ToolError, ToolRegistry
+from agent_tui.tools import ToolError, ToolFailure, ToolRegistry, ToolResult
 
 
 @pytest.mark.parametrize(
@@ -187,6 +187,8 @@ async def test_command_error_timeout_and_bounded_output(settings):
     )
     assert not failed.ok
     assert json.loads(failed.content)["exit_code"] == 3
+    assert failed.as_dict()["error"]["code"] == "command_failed"
+    assert failed.as_dict()["output"]["exit_code"] == 3
     timeout = await tools.execute(
         "run_command",
         {
@@ -199,10 +201,118 @@ async def test_command_error_timeout_and_bounded_output(settings):
     )
     assert not timeout.ok
     assert '"timed_out": true' in timeout.content
+    assert timeout.as_dict()["error"]["code"] == "command_timeout"
     output = await tools.execute(
         "run_command", {"argv": [sys.executable, "-c", "print('x'*1000000)"]}
     )
     assert len(output.content) < 1300
+    bounded = json.loads(output.content)
+    assert bounded["exit_code"] == 0 and bounded["truncated"]
+    assert isinstance(bounded["output"], str)
+    assert output.as_dict()["truncated"]
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ('{"files":["one.py"],"count":1}', {"files": ["one.py"], "count": 1}),
+        ('[1, "two", null]', [1, "two", None]),
+        ('"plain JSON string"', "plain JSON string"),
+        ("true", True),
+        ("0", 0),
+        ("null", None),
+        ("plain text\nsecond line", "plain text\nsecond line"),
+        ("", ""),
+        ("NaN", "NaN"),
+        ('{"value":Infinity}', '{"value":Infinity}'),
+    ],
+)
+def test_tool_reply_has_native_output_and_a_stable_envelope(content, expected):
+    reply = ToolResult(True, content).as_dict()
+    assert reply == {"ok": True, "output": expected, "error": None, "truncated": False}
+    assert json.loads(json.dumps(reply, allow_nan=False)) == reply
+
+
+def test_error_reply_keeps_partial_output_and_separates_diagnostics():
+    error = ToolFailure("command_failed", "Command exited with status 3.", "Inspect output.")
+    reply = ToolResult(False, '{"exit_code":3,"output":"traceback"}', error).as_dict()
+    assert reply == {
+        "ok": False,
+        "output": {"exit_code": 3, "output": "traceback"},
+        "error": {
+            "code": "command_failed",
+            "message": "Command exited with status 3.",
+            "retry_hint": "Inspect output.",
+        },
+        "truncated": False,
+    }
+    plain = ToolResult.from_error(ToolError("Bad input", code="invalid_arguments")).as_dict()
+    assert plain["output"] is None and plain["error"]["code"] == "invalid_arguments"
+    assert plain["error"]["message"] == "Bad input" and plain["error"]["retry_hint"] is None
+
+
+def test_plain_text_truncation_and_error_metadata_are_redacted(settings):
+    tools = ToolRegistry(replace(settings, max_output_chars=200))
+    source = settings.api_key + "x" * 1000
+    success = tools.sanitize(ToolResult(True, source)).as_dict()
+    assert success["ok"] and success["truncated"] and isinstance(success["output"], str)
+    error = ToolResult.from_error(
+        ToolError(source, code="example_error", retry_hint=settings.api_key)
+    )
+    failed = tools.sanitize(error).as_dict()
+    assert not failed["ok"] and failed["truncated"]
+    assert len(failed["error"]["message"]) <= 200
+    assert failed["error"]["retry_hint"] == "[REDACTED]"
+    assert settings.api_key not in json.dumps([success, failed])
+
+
+@pytest.mark.parametrize(
+    "name,field,payload",
+    [
+        (
+            "list_files",
+            "files",
+            {"files": [f"src/path-{i}.py" for i in range(100)], "truncated": False},
+        ),
+        (
+            "search_files",
+            "matches",
+            {
+                "matches": [
+                    {"path": "source.py", "line": i, "text": 'quoted "text" 🙂'}
+                    for i in range(1, 100)
+                ],
+                "truncated": False,
+                "skipped": 2,
+            },
+        ),
+        (
+            "read_file",
+            "content",
+            {
+                "path": "source.py",
+                "content": 'quoted "text" and slashes \\\\ 🙂\n' * 100,
+                "total_lines": 100,
+                "has_more": False,
+            },
+        ),
+    ],
+)
+def test_bounded_tool_results_keep_json_shapes_and_whole_list_entries(
+    settings, name, field, payload
+):
+    tools = ToolRegistry(replace(settings, max_output_chars=500))
+    result = tools.sanitize(ToolResult(True, json.dumps(payload, ensure_ascii=False)), name)
+    assert result.ok and len(result.content) <= 500
+    bounded = json.loads(result.content)
+    assert bounded["truncated"]
+    assert bounded[field] and len(bounded[field]) < len(payload[field])
+    assert bounded[field] == payload[field][: len(bounded[field])]
+    if name == "read_file":
+        assert bounded["has_more"] and bounded["total_lines"] == 100
+        assert bounded["path"] == "source.py"
+    if name == "search_files":
+        assert bounded["skipped"] == 2
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")

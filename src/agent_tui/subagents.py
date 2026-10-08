@@ -89,7 +89,11 @@ class SubagentManager:
             largest["summary"] = largest["summary"][: len(largest["summary"]) // 2]
             largest["truncated"] = True
             text = json.dumps({"results": results}, ensure_ascii=False)
-        return ToolResult(all(result["status"] == "completed" for result in results), text)
+        return ToolResult(
+            all(result["status"] == "completed" for result in results),
+            text,
+            truncated=any(result.get("truncated", False) for result in results),
+        )
 
     async def _run(self, identifier: str, task: dict[str, str]) -> dict[str, Any]:
         assert self.emit is not None and self.approve is not None

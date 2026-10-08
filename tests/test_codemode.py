@@ -10,10 +10,10 @@ import pytest
 from harness_router import RouteDecision
 
 from agent_tui.agent import Agent
-from agent_tui.codemode import execute_code
+from agent_tui.codemode import CODE_PROMPT, MAX_TOOL_CALLS, TOOL_BRIDGE_STUBS, execute_code
 from agent_tui.models import Completion, ToolCall
 from agent_tui.routing import HarnessDecisionLayer
-from agent_tui.tools import ToolResult, ToolSpec, object_schema
+from agent_tui.tools import ToolFailure, ToolRegistry, ToolResult, ToolSpec, object_schema
 
 
 class CodeDecisions:
@@ -96,8 +96,8 @@ for path in listing["output"]["files"]:
     assert len(executor.requests) == 2
     assert len(agent.router.states) == 2
     assert all(set(catalog) == {"execute_code", "finish"} for catalog in agent.router.catalogs)
-    assert json.loads(result_before(executor)["output"])["output"] == {"line_count": 2}
-    assert "1: one" not in result_before(executor)["output"]
+    assert result_before(executor)["output"]["output"] == {"line_count": 2}
+    assert "1: one" not in json.dumps(result_before(executor)["output"])
     assert all(selected is None for _, _, selected in executor.requests)
     assert {s["function"]["name"] for s in executor.requests[0][1]} == {"execute_code", "finish"}
     assert "read_files" not in executor.requests[0][0][0]["content"]
@@ -187,7 +187,10 @@ async def test_code_mode_enforces_the_decision_before_execution(
     assert result.status == "completed" and result.message == "Done"
     assert not (tmp_path / "file").exists()
     rejected = result_before(executor)
-    assert not rejected["ok"] and f"Return a call to one of: {selected}" in rejected["output"]
+    assert (
+        not rejected["ok"]
+        and f"Return a call to one of: {selected}" in rejected["error"]["message"]
+    )
 
 
 async def test_cancellation_during_code_mode_routing_does_not_reach_executor(settings):
@@ -231,7 +234,7 @@ await call_tool("write_file", {"path": "bypass", "content": "bad"})
     assert "+bad" in previews[0][1]
     assert not (tmp_path / "denied").exists() and not (tmp_path / "bypass").exists()
     assert not result_before(executor)["ok"]
-    assert "User denied" in result_before(executor)["output"]
+    assert "User denied" in result_before(executor)["error"]["message"]
 
 
 async def test_hooks_modify_nested_arguments_before_approval_and_check_diff(settings, tmp_path):
@@ -255,7 +258,7 @@ await call_tool("write_file", {"path": "file", "content": "original"})
 
     await agent.run("Write file", ignore, review)
     assert (tmp_path / "file").read_text() == "user edit during approval"
-    assert "changed while approval" in result_before(executor)["output"]
+    assert "changed while approval" in result_before(executor)["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -345,7 +348,7 @@ async def test_removed_bulk_read_is_rejected_in_code_mode(settings, direct):
         if direct
         else "Tool is not available: read_files"
     )
-    assert expected in result_before(executor)["output"]
+    assert expected in result_before(executor)["error"]["message"]
     assert not any(event.kind == "tool_start" and event.text == "read_files" for event in events)
 
 
@@ -360,10 +363,11 @@ async def test_repeat_guards_span_programs_but_reset_for_new_task(settings):
     )
     await agent.run("Inspect", ignore, deny)
     assert result_before(executor, 1)["ok"] and result_before(executor, 2)["ok"]
-    assert "Repeated identical action blocked" in result_before(executor, 3)["output"]
-    assert json.loads(result_before(executor, 3)["output"])["tools"] == [
-        {"tool": "write_file", "ok": False}
-    ]
+    assert "Repeated identical action blocked" in result_before(executor, 3)["error"]["message"]
+    failed_call = result_before(executor, 3)["output"]["tools"]
+    assert len(failed_call) == 1
+    assert failed_call[0]["tool"] == "write_file" and not failed_call[0]["ok"]
+    assert failed_call[0]["error"]["code"] == "repeated_action"
     agent.executor = Executor(code)
     await agent.run("Inspect again", ignore, deny)
     assert result_before(agent.executor)["ok"]
@@ -372,7 +376,7 @@ for i in range(3):
     await call_tool("write_file", {"path": "file", "content": "source"})
 """)
     await agent.run("Repeat", ignore, deny)
-    assert "Repeated identical action blocked" in result_before(agent.executor)["output"]
+    assert "Repeated identical action blocked" in result_before(agent.executor)["error"]["message"]
 
 
 async def test_repeated_programs_can_read_patch_and_verify_current_contents(settings, tmp_path):
@@ -394,7 +398,7 @@ after["output"]["content"]
     for index in range(1, 4):
         reply = result_before(executor, index)
         assert reply["ok"]
-        assert json.loads(reply["output"])["output"] == f"1: {index}"
+        assert reply["output"]["output"] == f"1: {index}"
 
 
 async def test_repeated_failed_reads_are_still_blocked(settings):
@@ -403,12 +407,13 @@ async def test_repeated_failed_reads_are_still_blocked(settings):
         *(f'{name} = await call_tool("read_file", {{"path": "missing"}})' for name in "abc"),
     )
     await agent.run("Inspect missing file", ignore, deny)
-    assert "File not found" in result_before(executor, 1)["output"]
-    assert "File not found" in result_before(executor, 2)["output"]
-    assert "Repeated identical action blocked" in result_before(executor, 3)["output"]
-    assert json.loads(result_before(executor, 3)["output"])["tools"] == [
-        {"tool": "read_file", "ok": False}
-    ]
+    assert "File not found" in result_before(executor, 1)["error"]["message"]
+    assert "File not found" in result_before(executor, 2)["error"]["message"]
+    assert "Repeated identical action blocked" in result_before(executor, 3)["error"]["message"]
+    failed_call = result_before(executor, 3)["output"]["tools"]
+    assert len(failed_call) == 1
+    assert failed_call[0]["tool"] == "read_file" and not failed_call[0]["ok"]
+    assert failed_call[0]["error"]["code"] == "repeated_action"
 
 
 async def test_direct_file_access_error_explains_tool_bridge_and_agent_can_recover(
@@ -425,11 +430,11 @@ async def test_direct_file_access_error_explains_tool_bridge_and_agent_can_recov
     assert result.status == "completed"
     denied = result_before(executor, 1)
     assert not denied["ok"]
-    error = json.loads(denied["output"])["error"]
+    error = denied["output"]["error"]
     assert "Code Mode cannot access host files directly" in error
     assert 'await call_tool("read_file"' in error
     recovered = result_before(executor, 2)
-    assert recovered["ok"] and "1: source" in recovered["output"]
+    assert recovered["ok"] and "1: source" in recovered["output"]["output"]["output"]["content"]
 
 
 async def test_cancellation_during_nested_approval_cleans_up_and_keeps_history(settings, tmp_path):
@@ -498,8 +503,9 @@ async def test_returned_output_is_bounded_and_redacted(settings):
     )
     await agent.run("Test output", ignore, deny)
     raw = result_before(executor)["output"]
-    assert settings.api_key not in raw and len(raw) <= 1000
-    assert json.loads(raw)["truncated"]
+    assert settings.api_key not in json.dumps(raw)
+    assert len(json.dumps(raw, ensure_ascii=False)) <= 1000
+    assert raw["truncated"]
 
 
 async def test_gathered_calls_are_serial_and_stop_after_denial(settings, tmp_path):
@@ -550,7 +556,7 @@ async def test_direct_catalog_calls_are_batched_without_model_correction_rounds(
     assert result.status == "completed" and len(executor.requests) == 2
     assert (tmp_path / "file").read_text() == content
     assert reviews == ["write_file"]
-    output = json.loads(result_before(executor)["output"])
+    output = result_before(executor)["output"]
     assert [tool["tool"] for tool in output["tools"]] == ["write_file", "read_file"]
     messages = executor.requests[1][0]
     assert messages[-2]["tool_calls"][0]["function"]["name"] == "execute_code"
@@ -578,3 +584,229 @@ async def test_direct_call_preflight_rejects_invalid_batch_without_partial_effec
     replies = [m for m in executor.requests[1][0] if m["role"] == "tool"]
     assert len(replies) == 2
     assert all(not json.loads(reply["content"])["ok"] for reply in replies)
+
+
+@pytest.mark.parametrize(
+    "invalid_code",
+    [
+        'call_tool("example", {})',
+        'reply = call_tool("example", {})\nreply["output"]',
+        'async def main():\n    return await call_tool("example", {})\nmain()',
+        'await call_tool("example", path="file")',
+        'await call_tool("example", "{}")',
+        'await read_file({"path": "file"})',
+        'reply = await call_tool("example", {})\nreply["content"]',
+        '{"flag": true}',
+        '{"flag": false}',
+        '{"value": null}',
+        "import subprocess",
+        "import requests",
+        'import asyncio\nasyncio.create_task(call_tool("example", {}))',
+        "if True\n    pass",
+    ],
+)
+async def test_generated_code_is_checked_before_any_tool_can_run(settings, invalid_code):
+    called = []
+
+    async def tool(name, arguments):
+        called.append(name)
+        return ToolResult(True, "{}")
+
+    # Even an error after a valid mutating call must be rejected before that call.
+    result = await execute_code(
+        'await call_tool("write_file", {"path": "file", "content": "changed"})\n' + invalid_code,
+        settings,
+        tool,
+    )
+    assert not result.ok and called == []
+    payload = json.loads(result.content)
+    assert payload["phase"] == "validation" and payload["tools"] == []
+    assert "main.py:" in payload["error"] or "SyntaxError" in payload["error"]
+    assert "No tools ran" in payload["retry_hint"]
+
+
+async def test_markdown_code_is_rejected_with_actionable_feedback(settings):
+    result = await execute_code(
+        '```python\nawait call_tool("list_files", {})\n```', settings, ignore
+    )
+    payload = json.loads(result.content)
+    assert not result.ok and payload["phase"] == "validation"
+    assert "without Markdown fences" in payload["retry_hint"]
+
+
+async def test_agent_recovers_from_validation_error_without_replaying_a_write(settings, tmp_path):
+    agent, executor = agent_for(
+        settings,
+        'await call_tool("write_file", {"path": "bad", "content": "bad"})\n'
+        'reply = call_tool("read_file", {"path": "bad"})\nreply["output"]',
+        'await call_tool("write_file", {"path": "good", "content": "verified"})\n'
+        'reply = await call_tool("read_file", {"path": "good"})\nreply["output"]',
+        auto_approve=True,
+    )
+    agent.router = CodeDecisions(
+        RouteDecision(tool="execute_code"),
+        RouteDecision(tool="execute_code"),
+        RouteDecision(tool="finish"),
+    )
+    result = await agent.run("Write and verify", ignore, deny)
+    assert result.status == "completed"
+    assert not (tmp_path / "bad").exists()
+    assert (tmp_path / "good").read_text() == "verified"
+    failed = result_before(executor, 1)["output"]
+    assert failed["phase"] == "validation" and failed["tools"] == []
+    recovered = result_before(executor, 2)["output"]
+    assert recovered["output"]["content"] == "1: verified"
+    for messages, _, selected in executor.requests:
+        prompt = messages[0]["content"]
+        assert TOOL_BRIDGE_STUBS in prompt
+        assert (
+            "For this response, call execute_code exactly once"
+            if selected == "execute_code"
+            else "For this response, finish with a concise summary"
+        ) in prompt
+
+
+async def test_prompt_inspection_example_runs_against_real_tool_shapes(settings, tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "example.py").write_text("example = True\n")
+    code = CODE_PROMPT.split("Example Python source for bounded inspection:\n", 1)[1]
+    agent, executor = agent_for(settings, code)
+    result = await agent.run("Inspect", ignore, deny)
+    assert result.status == "completed" and result_before(executor)["ok"]
+    output = result_before(executor)["output"]["output"]
+    assert output["files"][0]["content"] == "1: example = True"
+    assert output["truncated"] is False
+
+
+async def test_type_checked_data_processing_and_async_helpers_remain_available(settings):
+    async def tool(name, arguments):
+        return ToolResult(True, '{"text":"item 9"}')
+
+    result = await execute_code(
+        """
+import json
+import math
+import re
+
+async def extract():
+    reply = await call_tool("example", {"flag": True, "value": None})
+    digits = re.findall("[0-9]+", reply["output"]["text"])
+    return {"root": math.sqrt(int(digits[0])), "flag": False}
+
+json.dumps(await extract())
+""",
+        settings,
+        tool,
+    )
+    assert result.ok, result.content
+    assert json.loads(json.loads(result.content)["output"]) == {"root": 3.0, "flag": False}
+
+
+async def test_runtime_error_reports_completed_actions_for_safe_recovery(settings, tmp_path):
+    agent, executor = agent_for(
+        settings,
+        'await call_tool("write_file", {"path": "first", "content": "kept"})\n'
+        'reply = await call_tool("list_files", {})\nreply["output"]["missing_key"]',
+        auto_approve=True,
+    )
+    await agent.run("Inspect", ignore, deny)
+    failed = result_before(executor)["output"]
+    assert failed["phase"] == "runtime"
+    assert failed["tools"] == [
+        {"tool": "write_file", "ok": True},
+        {"tool": "list_files", "ok": True},
+    ]
+    assert (tmp_path / "first").read_text() == "kept"
+    assert "not rolled back" in failed["retry_hint"]
+
+
+async def test_truncated_file_output_can_still_be_consumed_by_generated_code(settings, tmp_path):
+    (tmp_path / "large.txt").write_text(('quoted "text" and slashes \\\\ 🙂\n') * 200)
+    agent, executor = agent_for(
+        settings,
+        'reply = await call_tool("read_file", {"path": "large.txt"})\n'
+        '{"excerpt": reply["output"]["content"][:30], '
+        '"truncated": reply["output"]["truncated"], '
+        '"has_more": reply["output"]["has_more"]}',
+        max_output_chars=1000,
+    )
+    await agent.run("Inspect large file", ignore, deny)
+    reply = result_before(executor)
+    assert reply["ok"]
+    output = reply["output"]["output"]
+    assert output["excerpt"].startswith('1: quoted "text"')
+    assert output["truncated"] and output["has_more"]
+
+
+@pytest.mark.parametrize("fragment", ['"\\\n🙂', "\0"])
+async def test_truncated_program_error_keeps_recovery_metadata_and_valid_json(settings, fragment):
+    async def tool(name, arguments):
+        return ToolResult(False, "Failure with escaped characters: " + fragment * 1000)
+
+    result = await execute_code(
+        'await call_tool("example", {})', replace(settings, max_output_chars=1000), tool
+    )
+    assert not result.ok and len(result.content) <= 1000
+    payload = json.loads(result.content)
+    assert payload["truncated"] and payload["phase"] == "runtime"
+    assert "not rolled back" in payload["retry_hint"]
+    assert payload["tool_calls"] == 1
+
+
+async def test_oversized_direct_call_batch_rejected_before_execution(settings, tmp_path):
+    agent, executor = agent_for(settings, auto_approve=True)
+    executor.completions = iter(
+        [
+            Completion(
+                calls=[
+                    ToolCall(str(i), "write_file", json.dumps({"path": str(i), "content": "x"}))
+                    for i in range(MAX_TOOL_CALLS + 1)
+                ]
+            ),
+            Completion(content="Stopped"),
+        ]
+    )
+    result = await agent.run("Write files", ignore, deny)
+    assert result.status == "completed"
+    assert not (tmp_path / "0").exists()
+    replies = [m for m in executor.requests[1][0] if m["role"] == "tool"]
+    assert len(replies) == MAX_TOOL_CALLS + 1
+    assert all(not json.loads(reply["content"])["ok"] for reply in replies)
+
+
+@pytest.mark.parametrize("content", ['{"nested":{"items":[1,true,null]}}', "plain text"])
+async def test_chat_reply_and_sandbox_bridge_share_the_same_response_shape(settings, content):
+    registry = ToolRegistry(settings)
+
+    async def handler(arguments):
+        return ToolResult(True, content)
+
+    registry.register(ToolSpec("example", "Example", object_schema({})), handler)
+    tool_result = await registry.execute("example", {})
+    message = Agent._tool_message(ToolCall("example", "example", "{}"), tool_result)
+    chat_reply = json.loads(message["content"])
+    code_result = await execute_code('await call_tool("example", {})', settings, registry.execute)
+    assert code_result.ok, code_result.content
+    sandbox_reply = code_result.as_dict()["output"]["output"]
+    assert sandbox_reply == chat_reply
+    assert set(chat_reply) == {"ok", "output", "error", "truncated"}
+
+
+async def test_failed_nested_tool_keeps_its_error_code_and_partial_output(settings):
+    agent, executor = agent_for(settings, 'await call_tool("example", {})')
+
+    async def handler(arguments):
+        return ToolResult(
+            False,
+            '{"completed":2,"remaining":1}',
+            ToolFailure("partial_failure", "The last item failed.", "Inspect completed items."),
+        )
+
+    agent.registry.register(ToolSpec("example", "Example", object_schema({})), handler)
+    await agent.run("Inspect", ignore, deny)
+    reply = result_before(executor)
+    assert not reply["ok"] and reply["error"]["code"] == "partial_failure"
+    assert reply["error"]["retry_hint"] == "Inspect completed items."
+    nested = reply["output"]["tools"][0]
+    assert nested["error"] == reply["error"]
+    assert nested["output"] == {"completed": 2, "remaining": 1}

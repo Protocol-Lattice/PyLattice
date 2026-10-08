@@ -19,7 +19,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from .config import Settings
 from .extensions import MCPServerConfig, expand_environment, safe_environment
 from .models import AgentEvent, Approval, EventSink
-from .tools import ToolError, ToolRegistry, ToolResult, ToolSpec
+from .tools import ToolError, ToolFailure, ToolRegistry, ToolResult, ToolSpec
 
 
 def tool_name(server: str, name: str) -> str:
@@ -150,20 +150,34 @@ class MCPManager:
                 content = []
                 for block in result.content:
                     if block.type == "text":
-                        content.append(block.text)
+                        content.append({"type": "text", "text": block.text})
                     else:
-                        content.append(f"[MCP {block.type} content omitted by this text interface]")
-                if result.structuredContent is not None:
-                    content.append(json.dumps(result.structuredContent, ensure_ascii=False))
-                return ToolResult(not result.isError, "\n".join(content) or "(empty MCP result)")
+                        content.append({"type": block.type, "omitted": True})
+                output = {"content": content, "structured_content": result.structuredContent}
+                error = None
+                if result.isError:
+                    detail = "\n".join(
+                        block["text"] for block in content if block["type"] == "text"
+                    )
+                    if not detail and isinstance(result.structuredContent, dict):
+                        detail = str(result.structuredContent.get("error", ""))
+                    error = ToolFailure(
+                        "mcp_error", detail or f"MCP {server.name}/{name} reported an error."
+                    )
+                return ToolResult(not result.isError, json.dumps(output, ensure_ascii=False), error)
             except TimeoutError:
-                return ToolResult(
-                    False,
-                    f"MCP {server.name}/{name} timed out; "
-                    "the remote action may have partially completed",
+                return ToolResult.from_error(
+                    ToolError(
+                        f"MCP {server.name}/{name} timed out; "
+                        "the remote action may have partially completed",
+                        code="mcp_timeout",
+                        retry_hint="Inspect remote state before retrying this action.",
+                    )
                 )
             except Exception as exc:
-                return ToolResult(False, f"MCP {server.name}/{name} failed: {exc}")
+                return ToolResult.from_error(
+                    ToolError(f"MCP {server.name}/{name} failed: {exc}", code="mcp_error")
+                )
 
         return execute
 

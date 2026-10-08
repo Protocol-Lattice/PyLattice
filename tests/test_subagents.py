@@ -62,7 +62,7 @@ def parent_agent(settings, tasks, factory):
 
 def delegated_output(agent):
     reply = json.loads(agent.executor.requests[1][0][-1]["content"])
-    return reply["ok"], json.loads(reply["output"])["results"]
+    return reply["ok"], reply["output"]["results"]
 
 
 async def test_delegation_runs_concurrently_with_isolated_contexts(settings, tmp_path):
@@ -264,7 +264,9 @@ async def test_delegated_results_stay_valid_json_when_truncated(settings):
     assert ok and len(results) == 3
     assert all(result["truncated"] for result in results)
     output = json.loads(parent.executor.requests[1][0][-1]["content"])["output"]
-    assert len(output) <= 700 and settings.api_key not in output
+    encoded = json.dumps(output, ensure_ascii=False)
+    assert len(encoded) <= 700 and settings.api_key not in encoded
+    assert json.loads(parent.executor.requests[1][0][-1]["content"])["truncated"]
 
 
 def test_delegation_schema_enforces_batch_limits(settings):

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +21,52 @@ async def allow(*_):
 
 async def ignore(*_):
     pass
+
+
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_mcp_keeps_text_and_structured_data_in_separate_fields(settings, is_error):
+    class Session:
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(
+                isError=is_error,
+                content=[
+                    SimpleNamespace(type="text", text="Remote explanation"),
+                    SimpleNamespace(type="image", data="omitted-binary-data"),
+                ],
+                structuredContent={"items": [{"id": 7}], "count": 1},
+            )
+
+    manager = MCPManager(settings, ())
+    handler = manager._handler(Session(), MCPServerConfig("example", command="unused"), "tool")
+    reply = (await handler({})).as_dict()
+    assert reply["ok"] is not is_error
+    assert reply["output"] == {
+        "content": [
+            {"type": "text", "text": "Remote explanation"},
+            {"type": "image", "omitted": True},
+        ],
+        "structured_content": {"items": [{"id": 7}], "count": 1},
+    }
+    if is_error:
+        assert reply["error"]["message"] == "Remote explanation"
+        assert reply["error"]["code"] == "mcp_error"
+    else:
+        assert reply["error"] is None
+
+
+async def test_empty_mcp_response_has_the_same_output_shape(settings):
+    class Session:
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(isError=False, content=[], structuredContent=None)
+
+    manager = MCPManager(settings, ())
+    handler = manager._handler(Session(), MCPServerConfig("example", command="unused"), "tool")
+    assert (await handler({})).as_dict() == {
+        "ok": True,
+        "output": {"content": [], "structured_content": None},
+        "error": None,
+        "truncated": False,
+    }
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -171,7 +217,10 @@ async def test_http_transport_headers_and_error_results(settings, monkeypatch):
     try:
         await manager.connect(registry, allow, ignore)
         result = await registry.execute("mcp__http__remote", {})
-        assert not result.ok and json.loads(result.content)["error"] == "failed"
+        assert not result.ok
+        assert result.as_dict()["output"]["structured_content"] == {"error": "failed"}
+        assert result.as_dict()["error"]["code"] == "mcp_error"
+        assert result.as_dict()["error"]["message"] == "failed"
         assert seen[0][1]["headers"]["Authorization"] == "Bearer token-value"
     finally:
         await manager.aclose()

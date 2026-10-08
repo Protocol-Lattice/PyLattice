@@ -97,7 +97,7 @@ class DemoExecutor:
                 0,
             )
         result = json.loads(messages[-1]["content"])
-        output = result["output"]
+        output = json.dumps(result["output"], ensure_ascii=False, indent=2)
         summary = (
             f"Offline demonstration complete in `{self.workspace.name}`.\n\n"
             f"The real `list_files` tool returned:\n\n```json\n{output}\n```\n\n"

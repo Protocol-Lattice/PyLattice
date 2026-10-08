@@ -52,12 +52,21 @@ for path in listing["output"]["files"][:3]:
     result = await call_tool("read_file", {"path": path})
     results.append(result["output"])
 results
+```
 
 **Behavior:**
 
-- `call_tool` returns `{"ok": true, "output": ...}` with JSON output already decoded
+- Send one `execute_code` tool call with a raw Python `code` string, without Markdown fences or prose. Use Python `True`, `False`, and `None` inside that string.
+- Use top-level `await call_tool("name", {"argument": value})` for every tool; names and arguments must match the current catalog. Tools are not Python functions, and no `asyncio.run` wrapper is needed.
+- Chat tool replies and `call_tool` share `{"ok": true, "output": ..., "error": null, "truncated": false}`. `output` is native JSON data or plain text; do not decode it a second time. `after_tool` hooks receive these same fields.
+- On failure, `error` contains `code`, `message`, and a nullable `retry_hint`. Plain errors have `output: null`; failed commands and other partial results retain structured output. In a program, a failed tool still raises and blocks later calls; its structured error and partial output are recorded in the tool log.
+- MCP output keeps `content` as typed blocks and `structured_content` as a JSON value or `null`. Text and structured data are not concatenated. Unsupported media blocks are represented by `{ "type": "image", "omitted": true }` (with the actual media type).
+- `truncated` is always present in the reply, including for plain text and delegated results. Check it before relying on returned data. Existing built-in output fields remain available.
+- `read_file` text is in `result["output"]["content"]` and includes display line numbers. Remove those prefixes from exact edit patches; check `has_more` and `truncated` before using excerpts. Large built-in results retain valid JSON and their output shapes when the metadata fits the output limit.
 - The final expression and printed output are returned to the model
 - Intermediate results stay inside the program; variables don't persist between programs
+- Syntax and types are checked before execution using [Monty's type checker](https://pydantic.dev/docs/monty/concepts/type-checking/). Missing awaits, undefined names, invalid bridge arguments and unsupported imports are rejected before tools run.
+- Errors include a `phase`, tool log and `retry_hint`. Fix validation errors in a new program. After runtime failures, inspect current state before retrying: successful actions are not rolled back, and a failed tool blocks later calls in that program.
 - Press **Esc** to cancel a running program
 
 **Execution:**

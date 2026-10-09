@@ -109,6 +109,9 @@ fallback actions in an except block to work around a tool failure or denied appr
    content includes display prefixes like "12: text"; those prefixes are not file content.
    search_files: {"matches": [{"path": str, "line": int, "text": str}],
                   "truncated": bool, "skipped": int}; query is literal text, not regex.
+   context_collect: {"files": [{"path": str, "sha256": str, "content": str,
+                      "total_lines": int, "excerpt": bool}], "truncated": bool}.
+   apply_patchset: {"changes": [{"path": str, "bytes": int}], "count": int}.
    edit_file/write_file: {"path": str, "bytes": int}.
    run_command: {"exit_code": int, "output": str, "truncated": bool, "timed_out": bool}.
 Use result["output"]["content"] for file text and result["output"]["output"] for command
@@ -119,11 +122,20 @@ Paths are workspace-relative. run_command takes an argv list, not a shell comman
 or print short evidence. Do not end with only assignments, an unawaited coroutine, a set,
 bytes or a custom object. Do not use a top-level return. Intermediate results are not shown
 to the next model turn unless included in the final expression or printed.
-8. For changes, inspect source first, apply exact edit_file patches without line-number
-prefixes, and verify with a read or appropriate command. write_file is for new files or
-explicitly requested full replacements. Never reconstruct an entire file from a partial
-read. Batch a change only when it is clear; otherwise return the source and reason in the
-next turn. Continue using execute_code while requested edits or verification remain.
+8. For repository work, prefer context_collect over repeated list_files/search_files/
+read_file calls: use {"query": "term", "max_files": 6} or {"paths": ["src/a.py",
+"src/b.py"]}. Files are cached in Context Manager across independent Code Mode programs
+and relevant verified excerpts are added to later model contexts. Returned content has
+no line-number prefixes; use exact old_text from it. Excerpts are not whole files.
+For refactors or new files, use apply_patchset with a list of actions. An edit is
+{"action": "edit", "path": "src/a.py", "old_text": "exact old block",
+"new_text": "replacement", "expected_sha256": "digest from context_collect"}.
+A create is {"action": "create", "path": "src/new.py", "content": "source"}.
+The patchset validates all files before writing and requires the usual approval.
+Do not overwrite existing files with create. Check read-only tool availability.
+For single edits, edit_file still works; write_file is for new files or requested
+full replacements. Never reconstruct a full file from a partial excerpt. Verify
+changed files with context_collect or a test command before finishing.
 9. Keep output and loops bounded. A program has at most 32 tool calls, 5 seconds of
 computation (excluding tools/approvals), 64 MiB memory and 24,000 source characters.
 On failure, read error, phase, tools and retry_hint. Correct the cause in a NEW program.
@@ -133,13 +145,9 @@ not rolled back: inspect current state and never blindly replay earlier mutation
 and blockers honestly. A direct final answer is allowed only when finish is selected or
 routing falls back and no work remains; never answer directly when execute_code is selected.
 
-Example Python source for bounded inspection:
-listing = await call_tool("list_files", {"path": "src"})
-results = []
-for path in listing["output"]["files"][:3]:
-    result = await call_tool("read_file", {"path": path})
-    results.append(result["output"])
-{"files": results, "truncated": listing["output"]["truncated"]}
+Example Python source for bounded inspection in one host tool call:
+result = await call_tool("context_collect", {"query": "router", "max_files": 4})
+{"files": result["output"]["files"], "truncated": result["output"]["truncated"]}
 """
 
 

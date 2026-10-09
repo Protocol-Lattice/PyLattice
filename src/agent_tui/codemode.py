@@ -117,8 +117,9 @@ fallback actions in an except block to work around a tool failure or denied appr
    edit_file/write_file: {"path": str, "bytes": int}.
    run_command: {"exit_code": int, "output": str, "truncated": bool, "timed_out": bool}.
 Use result["output"]["content"] for file text and result["output"]["output"] for command
-text. Check has_more and optional flags with output.get("truncated", False); request smaller
-ranges before relying on an excerpt.
+text. Check result["truncated"] and has_more before relying on an excerpt. When an
+older result was compacted from context its output may be None; re-read the source
+instead of assuming missing data means an empty result.
 Paths are workspace-relative. run_command takes an argv list, not a shell command string.
 7. End with a small JSON-compatible expression (dict, list, string, number, bool or None),
 or print short evidence. Do not end with only assignments, an unawaited coroutine, a set,
@@ -138,8 +139,8 @@ Do not overwrite existing files with create. Check read-only tool availability.
 For single edits, edit_file still works; write_file is for new files or requested
 full replacements. Never reconstruct a full file from a partial excerpt. Verify
 changed files with context_collect or a test command before finishing.
-9. Keep output and loops bounded. A program has at most 32 tool calls, 5 seconds of
-computation (excluding tools/approvals), 64 MiB memory and 24,000 source characters.
+9. Keep output and loops bounded. A program has at most 1024 tool calls, 5 seconds of
+computation (excluding tools/approvals), 64 MiB memory and 96,000 source characters.
 On failure, read error, phase, tools and retry_hint. Correct the cause in a NEW program.
 Validation errors run no tools. Runtime errors may follow successful actions, which are
 not rolled back: inspect current state and never blindly replay earlier mutations.
@@ -298,7 +299,7 @@ async def execute_code(
                     "max_feed_duration_secs": EXECUTION_SECONDS,
                     "max_memory": MEMORY_BYTES,
                     "max_recursion_depth": 100,
-                    "max_suspensions": 256,
+                    "max_suspensions": MAX_TOOL_CALLS + 16,
                 },
                 os_policy={"sleep": "zero"},
             ) as session,

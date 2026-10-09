@@ -98,34 +98,73 @@ class _Accumulator:
             )
         self.model = payload.get("model") or self.model
         usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            raise _ResponseShapeError("Invalid token usage in executor response")
         if isinstance(usage.get("total_tokens"), int):
             self.tokens = usage["total_tokens"]
         choices = payload.get("choices") or []
+        if not isinstance(choices, list):
+            raise _ResponseShapeError("Executor choices must be a list")
         if not choices:
             return
         choice = choices[0]
+        if not isinstance(choice, dict):
+            raise _ResponseShapeError("Executor choice must be an object")
         if choice.get("finish_reason"):
             self.finish_reason = choice["finish_reason"]
         delta = choice.get("delta") or choice.get("message") or {}
+        if not isinstance(delta, dict):
+            raise _ResponseShapeError("Executor message must be an object")
         content = response_text(delta.get("content"))
         self.content += content
         self.size += len(content)
         if content:
             await on_token(content)
-        for position, fragment in enumerate(delta.get("tool_calls") or []):
+        fragments = delta.get("tool_calls")
+        if fragments is None and delta.get("function_call") is not None:
+            # Some OpenAI-compatible endpoints still use the legacy single-call shape.
+            fragments = [{"index": 0, "id": "legacy_call_0",
+                          "function": delta["function_call"]}]
+        if fragments is None:
+            fragments = []
+        if isinstance(fragments, dict):
+            fragments = [fragments]
+        if not isinstance(fragments, list):
+            raise _ResponseShapeError("Executor tool_calls must be a list")
+        for position, fragment in enumerate(fragments):
+            if not isinstance(fragment, dict):
+                raise _ResponseShapeError("Executor tool call must be an object")
             index = fragment.get("index", position)
-            if not isinstance(index, int) or not 0 <= index < 16:
-                raise ExecutorError("Invalid tool-call index in stream")
+            if type(index) is not int or not 0 <= index < 16:
+                raise _ResponseShapeError("Invalid tool-call index in response")
             call = self.calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-            if fragment.get("id"):
-                call["id"] = fragment["id"]
+            call_id = fragment.get("id")
+            if call_id is not None:
+                if not isinstance(call_id, str):
+                    raise _ResponseShapeError("Invalid tool-call ID in response")
+                call["id"] = call_id
             function = fragment.get("function") or {}
-            for key in ("name", "arguments"):
-                value = function.get(key) or ""
-                if not isinstance(value, str):
-                    raise ExecutorError(f"Invalid tool {key} in stream")
-                call[key] += value
-                self.size += len(value)
+            if not isinstance(function, dict):
+                raise _ResponseShapeError("Executor tool function must be an object")
+            name = function.get("name")
+            if name is not None:
+                if not isinstance(name, str):
+                    raise _ResponseShapeError("Invalid tool name in response")
+                call["name"] += name
+                self.size += len(name)
+            arguments = function.get("arguments")
+            if arguments is not None:
+                if isinstance(arguments, str):
+                    # Streaming fragments are partial JSON, concatenated in order.
+                    call["arguments"] += arguments
+                    self.size += len(arguments)
+                elif isinstance(arguments, dict) and not call["arguments"]:
+                    # Non-streaming providers may return a JSON object, not a JSON string.
+                    encoded = json.dumps(arguments, ensure_ascii=False, allow_nan=False)
+                    call["arguments"] = encoded
+                    self.size += len(encoded)
+                else:
+                    raise _ResponseShapeError("Tool arguments must be JSON text or an object")
         if self.size > 1_000_000:
             raise ExecutorError("Provider response exceeds the 1 MB limit")
 
@@ -146,9 +185,11 @@ class _Accumulator:
         calls = []
         for index in sorted(self.calls):
             call = self.calls[index]
-            if not call["id"] or not call["name"]:
+            if not call["name"]:
                 raise ExecutorError("Incomplete tool call from executor")
-            calls.append(ToolCall(**call))
+            # IDs are required for transcript pairing; synthesize one only when the
+            # provider has returned a complete call without its optional-looking ID.
+            calls.append(ToolCall(call["id"] or f"call_{index}", call["name"], call["arguments"]))
         if not self.content.strip() and not calls:
             raise ExecutorError("Executor returned an empty response")
         if len({call.id for call in calls}) != len(calls):

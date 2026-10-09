@@ -49,16 +49,47 @@ Each request uses a 64,000-character context budget, task-relevant history, and 
 
 Enabled by default via `--code-mode` flag or `AGENT_TUI_CODE_MODE=true`. The decision model (`--router-model` or `AGENT_TUI_ROUTER_MODEL`) chooses `execute_code` or `finish` once per turn using the latest result. The executor then writes the selected program or final answer, with a catalog of workspace, skill, memory, delegation, and MCP tools. On a routing fallback, the executor chooses between both tools. A program can make dependent tool calls without requiring another model request between them.
 
-**Example:**
+**Fast repository inspection:**
 
 ```python
-listing = await call_tool("list_files", {"path": "src"})
-results = []
-for path in listing["output"]["files"][:3]:
-    result = await call_tool("read_file", {"path": path})
-    results.append(result["output"])
-results
+scan = await call_tool("context_collect", {"query": "router", "max_files": 6})
+{"files": scan["output"]["files"], "truncated": scan["output"]["truncated"]}
 ```
+
+This performs one bounded filesystem scan and remembers the **full verified source** of
+selected files in Context Manager. Later Code Mode programs automatically receive
+relevant excerpts, instead of re-reading the same files through many tool calls.
+Use `{"paths": ["src/first.py", "src/second.py"]}` to target exact paths.
+The result includes a SHA-256 for optimistic concurrency control.
+
+**Batched refactoring and file creation:**
+
+```python
+scan = await call_tool("context_collect", {"paths": ["src/app.py"]})
+revision = scan["output"]["files"][0]["sha256"]
+change = await call_tool("apply_patchset", {
+    "changes": [
+        {
+            "action": "edit", "path": "src/app.py",
+            "old_text": "old_function()", "new_text": "new_function()",
+            "expected_sha256": revision,
+        },
+        {
+            "action": "create", "path": "src/new_module.py",
+            "content": "def new_function():\\n    return 42\\n",
+        },
+    ]
+})
+change["output"]  # Read/test the modified files before finishing
+```
+
+`apply_patchset` preflights every change and rejects stale context, duplicate paths,
+ambiguous edits, and existing-file creations. It stages writes before commit and uses
+one normal approval with a diff for each file. If a commit fails partway, it attempts
+a safe rollback; filesystem-level atomicity across multiple paths is not guaranteed.
+
+The Monty process pool is reused within a task, but **variables do not persist**
+between programs: source state lives in Context Manager, not in the sandbox.
 
 **Behavior:**
 

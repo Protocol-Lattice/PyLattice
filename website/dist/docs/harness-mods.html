@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f6dbe4">
+  <meta name="description" content="Extend a prompt, add a workspace tool, and select your components with a TOML manifest. Run the whole example without an API key.">
+  <meta property="og:title" content="Build your first harness mod — PyLattice docs">
+  <meta property="og:description" content="Extend a prompt, add a workspace tool, and select your components with a TOML manifest. Run the whole example without an API key.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;family=IBM+Plex+Mono:wght@400;450;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./docs.css">
+  <script src="./docs.js" defer></script>
+  <title>Build your first harness mod — PyLattice docs</title>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header docs-header wrap">
+    <a class="wordmark" href="../index.html" aria-label="PyLattice home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 5 18 10.5v17L24 43 6 32.5v-17Z"/><path d="M6 15.5 24 26l18-10.5M24 26v17M24 5v14M6 32.5 24 19l18 13.5"/></svg><span>PyLattice<span class="brand-dot">.</span></span></a>
+    <nav class="docs-header-nav" aria-label="Main navigation"><a class="docs-home-link" href="../index.html">Home</a><a href="./index.html" aria-current="true">Docs</a><a href="https://github.com/Protocol-Lattice/PyLattice">GitHub ↗</a></nav>
+  </header>
+  <div class="docs-layout wrap">
+    <aside class="docs-sidebar"><nav aria-label="Documentation"><p class="docs-nav-label">Start here</p><a href="./index.html">Getting started</a>
+<a href="./code-mode.html">Code Mode</a>
+<p class="docs-nav-label">Customize</p><a href="./harness-mods.html" aria-current="page">Harness mods</a>
+<a href="./extensions.html">Extensions &amp; memory</a>
+<a class="docs-home" href="../index.html">← Back to PyLattice</a></nav></aside>
+    <main class="docs-article" id="main">
+      <div class="docs-breadcrumb"><a href="./index.html">Docs</a><span aria-hidden="true">/</span><span>Build your first harness mod</span></div>
+      <h1>Build your first harness mod</h1>
+      <p class="docs-lead">Extend a prompt, add a workspace tool, and select your components with a TOML manifest. Run the whole example without an API key.</p>
+      <div class="docs-meta"><span>TUTORIAL</span><span>PYTHON + TOML</span><span>OFFLINE EXAMPLE</span></div>
+      
+      <section id="before-you-start" aria-labelledby="before-you-start-title">
+<h2 id="before-you-start-title">Before you start</h2>
+<p>Complete the <a href="./index.html#install">installation steps</a> first. Work from the PyLattice repository root with Python 3.11+ and dependencies installed using <code>uv sync</code>.</p><p>A <strong>mod</strong> is a Python factory that fills a named harness slot: prompts, tools, a provider, the run loop, or even the terminal app. Unspecified slots use built-ins, so you can start with a small change.</p><div class="docs-note"><p><strong>Python with the app’s permissions.</strong> Mod factories are trusted application code. They run outside the Code Mode sandbox and load only when explicitly selected. Review a mod before using it.</p></div><p>To see the finished bundled example before writing your own:</p><div class="docs-code" data-copy-label="Terminal · bundled example">
+  <div class="docs-code-header"><span>Terminal · bundled example</span></div>
+  <pre tabindex="0" aria-label="Terminal · bundled example"><code>uv run agent-tui --mods examples/mods.toml --code-mode --prompt &quot;Inspect this workspace&quot;</code></pre>
+</div><p>Expect a workspace listing and the label <code>My modded workspace</code>. The example providers use the real loop and tools, but return scripted responses rather than acting as general-purpose language models.</p>
+</section>
+<section id="write-factories" aria-labelledby="write-factories-title">
+<h2 id="write-factories-title">1. Write the factories</h2>
+<p>Create <code>my_mods.py</code> in the repository root with both factories below:</p><div class="docs-code" data-copy-label="my_mods.py" id="tutorial-factories">
+  <div class="docs-code-header"><span>my_mods.py</span></div>
+  <pre tabindex="0" aria-label="my_mods.py"><code>import json
+
+from agent_tui.mods import ModContext
+from agent_tui.tools import ToolResult, ToolSpec, object_schema
+
+
+def build_prompts(context: ModContext):
+    prompts = context.default()
+    prompts.system_prompt += &quot;\n&quot; + context.options[&quot;instructions&quot;]
+    return prompts
+
+
+def build_tools(context: ModContext):
+    registry = context.default()
+
+    async def workspace_label(arguments):
+        return ToolResult(True, json.dumps(context.options[&quot;label&quot;]))
+
+    registry.register(
+        ToolSpec(
+            &quot;workspace_label&quot;,
+            &quot;Return the label for this workspace.&quot;,
+            object_schema({}),
+        ),
+        workspace_label,
+    )
+    return registry</code></pre>
+</div><p><code>context.default()</code> builds the current slot’s built-in implementation using its configured dependencies. The prompt factory appends instructions; the tools factory registers <code>workspace_label</code> alongside the existing tools.</p><p>The tool takes an empty argument object. Its async handler returns a <code>ToolResult</code>; the JSON-encoded label becomes the native <code>output</code> value in tool replies. This read-only tool uses the default low risk level.</p>
+</section>
+<section id="select-slots" aria-labelledby="select-slots-title">
+<h2 id="select-slots-title">2. Select your slots</h2>
+<p>Create <code>my-mods.toml</code> beside <code>my_mods.py</code>. Reuse the bundled offline router and executor so you can verify your own prompt and tool factories without credentials:</p><div class="docs-code" data-copy-label="my-mods.toml" id="tutorial-manifest">
+  <div class="docs-code-header"><span>my-mods.toml</span></div>
+  <pre tabindex="0" aria-label="my-mods.toml"><code>version = 1
+
+[mods]
+router = &quot;examples/harness_mods.py:build_router&quot;
+executor = &quot;examples/harness_mods.py:build_executor&quot;
+planner = &quot;none&quot;
+prompts = &quot;my_mods.py:build_prompts&quot;
+tools = &quot;my_mods.py:build_tools&quot;
+
+[options.prompts]
+instructions = &quot;Explain which observations support your answer.&quot;
+
+[options.tools]
+label = &quot;Docs workshop&quot;</code></pre>
+</div><p>Each <code>[mods]</code> entry maps a slot to <code>path.py:factory</code> or <code>importable.module:factory</code>. An <code>[options.SLOT]</code> table becomes that factory’s <code>context.options</code>. Here, the planner is explicitly disabled.</p><p>Keep these files at the repository root for this tutorial: Python file targets resolve relative to the manifest directory, which makes the <code>examples/harness_mods.py</code> targets work.</p>
+</section>
+<section id="run-it" aria-labelledby="run-it-title">
+<h2 id="run-it-title">3. Inspect and run</h2>
+<p>First inspect the effective factory selection, then exercise the providers:</p><div class="docs-code" data-copy-label="Terminal · inspect and check">
+  <div class="docs-code-header"><span>Terminal · inspect and check</span></div>
+  <pre tabindex="0" aria-label="Terminal · inspect and check"><code>uv run agent-tui --mods my-mods.toml --list-mods
+uv run agent-tui --mods my-mods.toml --check</code></pre>
+</div><p><code>--list-mods</code> does not import custom Python. Confirm that <code>prompts</code> and <code>tools</code> point at <code>my_mods.py</code>. The connection check constructs the router, executor, and tools; it should report <code>WorkspaceRouter</code>, <code>WorkspaceExecutor</code>, and <code>tool calling works via example/offline</code>. It does not validate every slot.</p><div class="docs-code" data-copy-label="Terminal · run your harness">
+  <div class="docs-code-header"><span>Terminal · run your harness</span></div>
+  <pre tabindex="0" aria-label="Terminal · run your harness"><code>uv run agent-tui --mods my-mods.toml --code-mode --prompt &quot;Inspect this workspace&quot;</code></pre>
+</div><p>Expand the <code>execute_code</code> trace. The example calls <code>workspace_label</code> and <code>list_files</code>, then finishes with <code>Custom harness observed:</code>. The returned data includes:</p><div class="docs-code">
+  <div class="docs-code-header"><span>Expected output · excerpt</span></div>
+  <pre tabindex="0" aria-label="Expected output · excerpt"><code>&quot;label&quot;: &quot;Docs workshop&quot;</code></pre>
+</div><p>Change the label in TOML and restart the app to see the new value. The offline executor is scripted, so it demonstrates the tool output but does not interpret your added prompt instructions.</p><p>You can also try <code>--no-code-mode</code> with the same manifest. In that mode, the example lists files directly and does not call <code>workspace_label</code>.</p>
+</section>
+<section id="live-providers" aria-labelledby="live-providers-title">
+<h2 id="live-providers-title">4. Use live providers</h2>
+<p>Once you have configured <code>OPENROUTER_API_KEY</code> as described in <a href="./index.html#first-run">getting started</a>, restore the built-in providers with CLI overrides. Your prompt and tool factories stay selected:</p><div class="docs-code" data-copy-label="Terminal · live Code Mode">
+  <div class="docs-code-header"><span>Terminal · live Code Mode</span></div>
+  <pre tabindex="0" aria-label="Terminal · live Code Mode"><code>uv run agent-tui --mods my-mods.toml --code-mode \
+  --mod router=default --mod executor=default \
+  --prompt &quot;Read the workspace label and explain what you find.&quot;</code></pre>
+</div><p>This command uses live model connections. The live executor can follow the prompt instructions and decide when the new tool is useful. To restore the built-in planner for the planned per-tool loop, also use <code>--mod planner=default</code> with <code>--no-code-mode</code>.</p>
+</section>
+<section id="configuration" aria-labelledby="configuration-title">
+<h2 id="configuration-title">Configuration reference</h2>
+<div class="docs-table" role="region" tabindex="0" aria-label="Selecting factories"><table><caption>Selecting factories</caption><thead><tr><th scope="col">Setting</th><th scope="col">Behavior</th></tr></thead><tbody><tr><td><code>--mods PATH</code></td><td>Select a manifest. <code>AGENT_TUI_MODS</code> provides the environment default.</td></tr><tr><td><code>--mod SLOT=FACTORY</code></td><td>Override one manifest selection. Repeat as needed; the last value for a slot wins.</td></tr><tr><td><code>default</code></td><td>Restore the built-in factory. Existing options are retained, but built-ins do not automatically apply them.</td></tr><tr><td><code>none</code></td><td>Disable <code>planner</code> or <code>subagents</code>. All other slots require an implementation.</td></tr><tr><td><code>--list-mods</code></td><td>Print effective targets without importing custom code.</td></tr></tbody></table></div><ul><li>Relative manifest paths resolve from <code>--workspace</code>.</li><li>Python file targets resolve from the manifest directory, or the workspace when no manifest is selected. This also applies to file targets supplied by <code>--mod</code>.</li><li>Module targets must be importable in the active Python environment. A package’s <code>__init__.py</code> can be a file target when relative imports are needed.</li><li>Manifests use <code>version = 1</code>. PyLattice does not automatically discover or import <code>.agent-tui/mods.toml</code>.</li><li>Restart the app after changing factory selection or Python modules; there is no hot reload.</li></ul>
+</section>
+<section id="factory-contract" aria-labelledby="factory-contract-title">
+<h2 id="factory-contract-title">Factory contract</h2>
+<p>A factory is a <strong>synchronous callable</strong> accepting one <code>ModContext</code> and returning a component. Put asynchronous I/O in component methods. A component may wrap a built-in, subclass it, or provide a different implementation with the required interface.</p><div class="docs-table" role="region" tabindex="0" aria-label="Inside a factory"><table><caption>Inside a factory</caption><thead><tr><th scope="col">Context value</th><th scope="col">Use it for</th></tr></thead><tbody><tr><td><code>context.options</code></td><td>A private copy of this slot’s options for the current factory call.</td></tr><tr><td><code>context.settings</code></td><td>The current workspace and application settings.</td></tr><tr><td><code>context.default()</code></td><td>Create the current slot’s built-in implementation without recursively calling your replacement.</td></tr><tr><td><code>context.get("slot")</code></td><td>Resolve another configured component, cached within this runtime.</td></tr><tr><td><code>context.runtime.initial_prompt</code></td><td>Pass the CLI prompt into a replacement app.</td></tr><tr><td><code>context.runtime.allow_delegation</code></td><td>Distinguish the root runtime from delegated children.</td></tr></tbody></table></div><p>Factories should return fresh stateful instances. Child agents share the factory definitions and options, but receive fresh runtimes, providers, histories, and registries. Delegated runtimes return <code>None</code> for <code>subagents</code>, preserving the default no-nested-delegation behavior.</p>
+</section>
+<section id="slots" aria-labelledby="slots-title">
+<h2 id="slots-title">Available slots</h2>
+<p>These are the boundaries used by the built-in consumers. The loader checks main callable entry points, not every argument, attribute, or result type. Keep the consumer’s contract, or replace that consumer too.</p><div class="docs-table" role="region" tabindex="0" aria-label="Harness component slots"><table><caption>Harness component slots</caption><thead><tr><th scope="col">Slot</th><th scope="col">Built-in contract / purpose</th></tr></thead><tbody><tr><td><code>app</code></td><td><code>AgentApp</code>: synchronous <code>run()</code>; terminal UI and initial prompt.</td></tr><tr><td><code>agent</code></td><td><code>Agent</code>: async <code>run(goal, emit, approve)</code> and <code>aclose()</code>; the TUI also uses its service attributes and history.</td></tr><tr><td><code>loop</code></td><td><code>DefaultLoop</code>: async <code>run(agent, goal, emit, approve)</code>; turns, events, and run cleanup.</td></tr><tr><td><code>router</code></td><td><code>HarnessDecisionLayer</code>: async <code>route(state, tools)</code>; <code>route_mcts(state, tools, plan)</code> for planned MCTS.</td></tr><tr><td><code>executor</code></td><td><code>OpenRouterExecutor</code>: async <code>complete(messages, schemas, selected, on_token)</code> returning <code>Completion</code>.</td></tr><tr><td><code>planner</code></td><td><code>Planner</code>: async <code>plan(state, tools)</code>. May be <code>None</code>; defaults to disabled in Code Mode.</td></tr><tr><td><code>prompts</code></td><td><code>DefaultPrompts</code>: <code>build(...)</code> returns messages; the built-in exposes mutable <code>system_prompt</code>.</td></tr><tr><td><code>code_runtime</code></td><td><code>DefaultCodeRuntime</code>: <code>spec</code>, <code>prompt</code>, <code>adapt</code>, and async <code>execute</code>.</td></tr><tr><td><code>tools</code></td><td><code>ToolRegistry</code>: schemas, descriptors, registration, validation, execution, approval previews, and sanitization.</td></tr><tr><td><code>tool_policy</code></td><td><code>DefaultToolPolicy</code>: async <code>execute</code>; policies and approvals for top-level and nested calls.</td></tr><tr><td><code>tool_bindings</code></td><td><code>DefaultToolBindings</code>: <code>register</code> and <code>refresh</code>; skill, memory, and delegation tools.</td></tr><tr><td><code>responses</code></td><td><code>DefaultResponses</code>: <code>as_dict(result)</code> and <code>message(call, result)</code>.</td></tr><tr><td><code>context</code></td><td><code>ContextManager</code>: <code>build</code>, <code>clear</code>, <code>remember_turn</code>, <code>compact</code>, history, and stats.</td></tr><tr><td><code>memory</code></td><td><code>MemoryStore</code>: <code>context</code>, <code>record_run</code>, <code>search</code>, <code>put</code>, and <code>forget</code>.</td></tr><tr><td><code>skills</code></td><td><code>SkillManager</code>: discovery, activation, catalog, instructions, and resource reads. Plugin refresh rebuilds this factory.</td></tr><tr><td><code>plugins</code></td><td><code>PluginManager</code>: skill roots, bootstrap, installed plugins, catalog, and plugin management.</td></tr><tr><td><code>extensions</code></td><td><code>ExtensionConfig</code>: server and hook definitions used by the default MCP and middleware factories.</td></tr><tr><td><code>middleware</code></td><td><code>MiddlewareManager</code>: async <code>authorize</code> and <code>dispatch</code>, plus hooks and handlers.</td></tr><tr><td><code>mcp</code></td><td><code>MCPManager</code>: async <code>connect(registry, approve, emit)</code> and <code>aclose()</code>; status for the TUI.</td></tr><tr><td><code>subagents</code></td><td><code>SubagentManager</code>: <code>begin_run</code>, <code>end_run</code>, and async <code>execute</code>. May be <code>None</code>.</td></tr></tbody></table></div><p>For exact method signatures, see the <a href="https://github.com/Protocol-Lattice/PyLattice/blob/main/src/agent_tui/contracts.py">typed protocols</a> and the <a href="https://github.com/Protocol-Lattice/PyLattice/blob/main/docs/mods.md">full component reference</a>. Shared values live in <code>models.py</code>, <code>tools.py</code>, and <code>planner.py</code>.</p><p>The default loop reserves <code>execute_code</code> with a <code>code</code> argument and <code>finish</code> with a <code>summary</code> argument. Preserve the standard <code>ok</code>, <code>output</code>, <code>error</code>, and <code>truncated</code> response fields, or replace their prompt and runtime consumers together. A different agent interface may also need a replacement app.</p><p>Set <code>requires_api_key = True</code> on an executor only when it uses the OpenRouter key. Other providers handle their own credentials.</p>
+</section>
+<section id="replace-tools" aria-labelledby="replace-tools-title">
+<h2 id="replace-tools-title">Replace individual tools</h2>
+<p>A tools factory can call <code>context.default()</code> to get the registry, then register, replace, or remove tools:</p><div class="docs-code" data-copy-label="Python · inside a tools factory">
+  <div class="docs-code-header"><span>Python · inside a tools factory</span></div>
+  <pre tabindex="0" aria-label="Python · inside a tools factory"><code>registry.register(spec, handler)      # Add; duplicate names are rejected.
+registry.replace(spec, handler)       # Replace, including a built-in.
+registry.unregister(&quot;run_command&quot;)    # Remove a tool.</code></pre>
+</div><p>Here, <code>spec</code> is your <code>ToolSpec</code> and <code>handler</code> is an async callable receiving validated arguments and returning <code>ToolResult</code>. Label risk accurately; the built-in registry uses it for read-only filtering and approvals, and applies validation, sanitization, and output limits.</p><p>Skill, memory, and delegation tools are bound later; customize <code>tool_bindings</code> for those. MCP tools are installed by <code>mcp.connect()</code> each run. Replacing <code>tool_policy</code> replaces the policy boundary, so your implementation must supply the approval rules you need.</p>
+</section>
+<section id="lifecycle" aria-labelledby="lifecycle-title">
+<h2 id="lifecycle-title">Compose and clean up</h2>
+<p>You can also select factories in Python. This complete script uses the two factories above and the bundled offline providers:</p><div class="docs-code" data-copy-label="run_mods.py · save in the repository root" id="tutorial-composition">
+  <div class="docs-code-header"><span>run_mods.py · save in the repository root</span></div>
+  <pre tabindex="0" aria-label="run_mods.py · save in the repository root"><code>import asyncio
+from pathlib import Path
+
+from agent_tui.config import Settings
+from agent_tui.mods import HarnessMods, ModRuntime, ModSpec
+from my_mods import build_prompts, build_tools
+
+
+async def emit(event):
+    pass
+
+
+async def approve(title, detail):
+    return False
+
+
+async def main():
+    workspace = Path(__file__).resolve().parent
+    settings = Settings(workspace=workspace, memory_enabled=False)
+    mods = HarnessMods(
+        {
+            &quot;router&quot;: &quot;examples/harness_mods.py:build_router&quot;,
+            &quot;executor&quot;: &quot;examples/harness_mods.py:build_executor&quot;,
+            &quot;planner&quot;: &quot;none&quot;,
+            &quot;prompts&quot;: ModSpec(build_prompts, {
+                &quot;instructions&quot;: &quot;Explain the observations.&quot;
+            }),
+            &quot;tools&quot;: ModSpec(build_tools, {&quot;label&quot;: &quot;Docs workshop&quot;}),
+        },
+        base=workspace,
+    )
+    async with ModRuntime(settings, mods) as runtime:
+        agent = runtime.get(&quot;agent&quot;)
+        result = await agent.run(&quot;Inspect this workspace&quot;, emit, approve)
+        print(result.message)
+
+
+asyncio.run(main())</code></pre>
+</div><div class="docs-code" data-copy-label="Terminal · Python composition">
+  <div class="docs-code-header"><span>Terminal · Python composition</span></div>
+  <pre tabindex="0" aria-label="Terminal · Python composition"><code>uv run python run_mods.py</code></pre>
+</div><p>The runtime calls each distinct component’s optional <code>aclose()</code> in reverse construction order, including rebuilt components. It attempts all closers and reports grouped failures. Closing the runtime twice is harmless.</p><p>Close resources your component owns, not dependencies obtained through <code>context.get()</code>. The default loop closes MCP connections after each run, so a custom MCP component must support reconnecting and repeated closes. The CLI always closes its runtime, including when app construction or execution fails.</p>
+</section>
+<section id="troubleshooting" aria-labelledby="troubleshooting-title">
+<h2 id="troubleshooting-title">Troubleshooting</h2>
+<div class="docs-table" role="region" tabindex="0" aria-label="Common mod errors"><table><caption>Common mod errors</caption><thead><tr><th scope="col">Symptom</th><th scope="col">What to check</th></tr></thead><tbody><tr><td><code>Cannot load mod</code></td><td>Check the file path relative to the manifest, the factory name, and imports in the active environment.</td></tr><tr><td><code>must be synchronous</code></td><td>Declare the factory with <code>def</code>, not <code>async def</code>. Component methods can be async.</td></tr><tr><td><code>Unknown mod slot</code></td><td>Use an exact slot name from the table above; manifest version must be integer <code>1</code>.</td></tr><tr><td><code>cannot be disabled</code></td><td>Only <code>planner</code> and <code>subagents</code> accept <code>none</code>.</td></tr><tr><td><code>Mod dependency cycle</code></td><td>Follow the reported slot chain. Use <code>context.default()</code> to extend the current slot instead of resolving it with <code>context.get()</code>.</td></tr><tr><td><code>Docs workshop</code> is missing</td><td>Use Code Mode and select <code>my-mods.toml</code>. The bundled manifest uses a different label; the routed example only lists files.</td></tr><tr><td>Edits have no effect</td><td>Restart the app. Verify the selected targets with <code>--list-mods</code> and check the manifest directory.</td></tr></tbody></table></div><p>Compare your files with the <a href="https://github.com/Protocol-Lattice/PyLattice/blob/main/examples/mods.toml">bundled manifest</a> and <a href="https://github.com/Protocol-Lattice/PyLattice/blob/main/examples/harness_mods.py">example factories</a>.</p>
+</section>
+      <nav class="docs-next" aria-label="Continue reading"><a href="#main">Back to top ↑</a><a href="./extensions.html">Explore extensions and memory →</a></nav>
+    </main>
+    <aside class="docs-toc"><p class="docs-nav-label">On this page</p><nav aria-label="On this page"><a href="#before-you-start">Before you start</a>
+<a href="#write-factories">1. Write the factories</a>
+<a href="#select-slots">2. Select your slots</a>
+<a href="#run-it">3. Inspect and run</a>
+<a href="#live-providers">4. Use live providers</a>
+<a href="#configuration">Configuration reference</a>
+<a href="#factory-contract">Factory contract</a>
+<a href="#slots">Available slots</a>
+<a href="#replace-tools">Replace individual tools</a>
+<a href="#lifecycle">Compose and clean up</a>
+<a href="#troubleshooting">Troubleshooting</a></nav></aside>
+  </div>
+  <footer class="site-footer wrap"><a class="wordmark" href="../index.html"><span>PyLattice<span class="brand-dot">.</span></span></a><p>Made of Python. Open to possibility.</p><div><a href="./index.html">Documentation</a><a href="https://github.com/Protocol-Lattice/PyLattice">Source ↗</a><a href="https://github.com/Protocol-Lattice/PyLattice/issues">Report an issue ↗</a></div></footer>
+  <div class="docs-status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

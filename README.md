@@ -151,7 +151,8 @@ Start example MCP servers and hooks:
 uv run agent-tui --extensions examples/extensions.toml
 ```
 
-See [extensions documentation](docs/extensions.md) for full configuration details.
+See the [extensions guide](website/dist/docs/extensions.html) for skills, memory,
+MCP server configuration, and middleware hooks.
 
 ---
 
@@ -168,9 +169,10 @@ uv run agent-tui --mods my-mods.toml --mod executor=my_package:build_executor
 uv run agent-tui --list-mods                # Inspect selection without importing mods
 ```
 
-See [the mod guide](docs/mods.md) for every slot, factory contracts, configuration, and
-lifecycle handling. Mods are explicitly selected trusted Python code; no manifest is
-required to use the defaults.
+Start with the [harness mods tutorial](website/dist/docs/harness-mods.html) to build
+and run your first prompt and tool factories. See [the mod reference](docs/mods.md)
+for every slot, factory contracts, configuration, and lifecycle handling. Mods are
+explicitly selected trusted Python code; no manifest is required to use the defaults.
 
 ---
 
@@ -216,8 +218,15 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory website/dist
 ```
 
 Open `http://127.0.0.1:4173`. From `website/`, `npm start` runs the same preview
-and `npm run check` checks the JavaScript syntax. Any static host can serve the
+and `npm run check` checks the homepage and docs JavaScript syntax. Any static host can serve the
 contents of `website/dist/`.
+
+The [website docs](website/dist/docs/index.html) are served at `/docs/` and cover
+getting started, Code Mode, extensions and memory, and a step-by-step harness mods
+tutorial with a slot reference. The pages are plain HTML in `website/dist/docs/`;
+edit them directly, with shared presentation in `docs.css` and optional copy buttons
+in `docs.js`. Reading and navigation work without JavaScript. Keep mod examples
+aligned with `examples/harness_mods.py`, `examples/mods.toml`, and `docs/mods.md`.
 
 For Vercel, deploy the static files directly. The included `vercel.json` files
 select the **Other** framework preset, skip installation and building, and set

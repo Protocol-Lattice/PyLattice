@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f6dbe4">
+  <meta name="description" content="From your first prompt to a harness of your own. Install PyLattice, explore Code Mode, and make the agent work your way.">
+  <meta property="og:title" content="Getting started — PyLattice docs">
+  <meta property="og:description" content="From your first prompt to a harness of your own. Install PyLattice, explore Code Mode, and make the agent work your way.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;family=IBM+Plex+Mono:wght@400;450;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./docs.css">
+  <script src="./docs.js" defer></script>
+  <title>Getting started — PyLattice docs</title>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header docs-header wrap">
+    <a class="wordmark" href="../index.html" aria-label="PyLattice home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 5 18 10.5v17L24 43 6 32.5v-17Z"/><path d="M6 15.5 24 26l18-10.5M24 26v17M24 5v14M6 32.5 24 19l18 13.5"/></svg><span>PyLattice<span class="brand-dot">.</span></span></a>
+    <nav class="docs-header-nav" aria-label="Main navigation"><a class="docs-home-link" href="../index.html">Home</a><a href="./index.html" aria-current="page">Docs</a><a href="https://github.com/Protocol-Lattice/PyLattice">GitHub ↗</a></nav>
+  </header>
+  <div class="docs-layout wrap">
+    <aside class="docs-sidebar"><nav aria-label="Documentation"><p class="docs-nav-label">Start here</p><a href="./index.html" aria-current="page">Getting started</a>
+<a href="./code-mode.html">Code Mode</a>
+<p class="docs-nav-label">Customize</p><a href="./harness-mods.html">Harness mods</a>
+<a href="./extensions.html">Extensions &amp; memory</a>
+<a class="docs-home" href="../index.html">← Back to PyLattice</a></nav></aside>
+    <main class="docs-article" id="main">
+      <div class="docs-breadcrumb"><a href="./index.html">Docs</a><span aria-hidden="true">/</span><span>Getting started</span></div>
+      <h1>Getting started</h1>
+      <p class="docs-lead">From your first prompt to a harness of your own. Install PyLattice, explore Code Mode, and make the agent work your way.</p>
+      <div class="docs-meta"><span>PYTHON 3.11+</span><span>TERMINAL FIRST</span><span>OPEN SOURCE</span></div>
+      <a class="docs-feature" href="./harness-mods.html"><span class="eyebrow">TUTORIAL / HARNESS MODS</span><h2>Build an agent that fits.</h2><p>Write a Python factory, add a tool, and run your own harness. Start with a working offline example.</p><span>Build your first mod →</span></a>
+      <section id="install" aria-labelledby="install-title">
+<h2 id="install-title">Install PyLattice</h2>
+<p>You need Python 3.11 or newer, Git, and <a href="https://docs.astral.sh/uv/">uv</a>. Run these commands in a terminal:</p><div class="docs-code" data-copy-label="Terminal · install">
+  <div class="docs-code-header"><span>Terminal · install</span></div>
+  <pre tabindex="0" aria-label="Terminal · install"><code>git clone https://github.com/Protocol-Lattice/PyLattice.git
+cd PyLattice
+uv sync</code></pre>
+</div><p>The commands in these docs assume you are in the repository root. PyLattice uses the current directory as its workspace unless you pass <code>--workspace PATH</code>.</p>
+</section>
+<section id="first-run" aria-labelledby="first-run-title">
+<h2 id="first-run-title">Run your first task</h2>
+<h3>Try the offline demo</h3><p>After installing dependencies, the demo runs without credentials or model requests.</p><div class="docs-code" data-copy-label="Terminal · offline demo">
+  <div class="docs-code-header"><span>Terminal · offline demo</span></div>
+  <pre tabindex="0" aria-label="Terminal · offline demo"><code>uv run agent-tui --demo</code></pre>
+</div><p>Try “Help me understand this project.” The demo uses scripted responses to show the interface and tool flow.</p><h3>Connect the live agent</h3><p>Copy the environment template, then add your <code>OPENROUTER_API_KEY</code> to the workspace’s <code>.env</code> file.</p><div class="docs-code" data-copy-label="Terminal · environment">
+  <div class="docs-code-header"><span>Terminal · environment</span></div>
+  <pre tabindex="0" aria-label="Terminal · environment"><code>cp .env.example .env</code></pre>
+</div><div class="docs-code" data-copy-label=".env · add this setting">
+  <div class="docs-code-header"><span>.env · add this setting</span></div>
+  <pre tabindex="0" aria-label=".env · add this setting"><code>OPENROUTER_API_KEY=your_key_here</code></pre>
+</div><div class="docs-code" data-copy-label="Terminal · launch">
+  <div class="docs-code-header"><span>Terminal · launch</span></div>
+  <pre tabindex="0" aria-label="Terminal · launch"><code>uv run agent-tui --prompt &quot;Help me understand this project.&quot;</code></pre>
+</div><p>The executor defaults to <code>openrouter/free</code>; the decision model defaults to <code>typesafe/jev-1.13</code>. Use <code>--model</code> and <code>--router-model</code> to select other models.</p><div class="docs-note"><p><strong>Follow the work.</strong> Expand tool traces to inspect actions, respond to approval prompts, and press <kbd>Esc</kbd> to cancel a running program.</p></div>
+</section>
+<section id="modes" aria-labelledby="modes-title">
+<h2 id="modes-title">Choose a run mode</h2>
+<div class="docs-table" role="region" tabindex="0" aria-label="Common launch commands"><table><caption>Common launch commands</caption><thead><tr><th scope="col">Command</th><th scope="col">Behavior</th></tr></thead><tbody><tr><td><code>uv run agent-tui</code></td><td>Code Mode by default: the decision model selects a Python tool program or a final answer.</td></tr><tr><td><code>uv run agent-tui --no-code-mode</code></td><td>Use the planner and Harness Router MCTS to select individual tools.</td></tr><tr><td><code>uv run agent-tui --fast</code></td><td>Use Jev routing without the planner; selects the per-tool loop.</td></tr><tr><td><code>uv run agent-tui --read-only</code></td><td>Disable mutating tools, including file writes and commands.</td></tr><tr><td><code>uv run agent-tui --demo --no-code-mode</code></td><td>Try the routed loop offline.</td></tr></tbody></table></div><p><code>--routing</code>, <code>--route-mcts</code>, <code>--no-planner</code>, and <code>--fast</code> select the per-tool loop. Use <code>--fast</code> for routing without planning; MCTS requires the planner.</p>
+</section>
+<section id="configuration" aria-labelledby="configuration-title">
+<h2 id="configuration-title">Configure your workspace</h2>
+<div class="docs-code" data-copy-label="Terminal · workspace and limits">
+  <div class="docs-code-header"><span>Terminal · workspace and limits</span></div>
+  <pre tabindex="0" aria-label="Terminal · workspace and limits"><code>uv run agent-tui --workspace /path/to/project --context-chars 64000 --max-steps 24
+uv run agent-tui --help</code></pre>
+</div><div class="docs-table" role="region" tabindex="0" aria-label="Frequently used settings"><table><caption>Frequently used settings</caption><thead><tr><th scope="col">Flag</th><th scope="col">What it controls</th></tr></thead><tbody><tr><td><code>--context-chars N</code></td><td>Request context budget; also configurable with <code>AGENT_TUI_CONTEXT_CHARS</code>.</td></tr><tr><td><code>--max-steps N</code></td><td>Model turns per task. A Code Mode turn can contain multiple tool actions.</td></tr><tr><td><code>--command-timeout SECONDS</code></td><td>Time limit for a workspace command.</td></tr><tr><td><code>--no-memory</code></td><td>Disable persistent workspace memory.</td></tr><tr><td><code>--skills-dir PATH</code></td><td>Add a skill collection. Repeat for multiple directories.</td></tr><tr><td><code>--extensions PATH</code></td><td>Load MCP servers and command hooks from TOML.</td></tr><tr><td><code>--mods PATH</code></td><td>Select trusted Python component factories using a TOML manifest.</td></tr></tbody></table></div><p>Explicit CLI values take precedence over supported environment settings. The CLI loads <code>.env</code> from the selected workspace without overwriting variables already set in your environment.</p>
+</section>
+<section id="commands" aria-labelledby="commands-title">
+<h2 id="commands-title">Find your way around</h2>
+<div class="docs-table" role="region" tabindex="0" aria-label="Commands inside the terminal app"><table><caption>Commands inside the terminal app</caption><thead><tr><th scope="col">Command</th><th scope="col">Use it to</th></tr></thead><tbody><tr><td><code>/help</code></td><td>List interactive commands.</td></tr><tr><td><code>/context</code> · <code>/compact</code></td><td>Inspect context usage or shorten conversation history.</td></tr><tr><td><code>/skills</code> · <code>/skill NAME</code></td><td>List workflows or pin one across tasks.</td></tr><tr><td><code>/plugins</code></td><td>Inspect the plugin marketplace and installed plugins.</td></tr><tr><td><code>/mcp</code> · <code>/hooks</code></td><td>Inspect server status and middleware hooks.</td></tr><tr><td><code>/memory</code></td><td>Inspect saved workspace notes and outcomes.</td></tr></tbody></table></div>
+</section>
+<section id="next-steps" aria-labelledby="next-steps-title">
+<h2 id="next-steps-title">Keep building</h2>
+<div class="docs-cards"><a class="docs-card" href="./code-mode.html"><h3>Understand Code Mode ↗</h3><p>Learn the tool bridge, response shape, and how to recover from a failed program.</p></a><a class="docs-card" href="./extensions.html"><h3>Connect your workspace ↗</h3><p>Add skills, persistent memory, MCP servers, and middleware hooks.</p></a></div>
+</section>
+      <nav class="docs-next" aria-label="Continue reading"><a href="#main">Back to top ↑</a><a href="./harness-mods.html">Build your first harness mod →</a></nav>
+    </main>
+    <aside class="docs-toc"><p class="docs-nav-label">On this page</p><nav aria-label="On this page"><a href="#install">Install PyLattice</a>
+<a href="#first-run">Run your first task</a>
+<a href="#modes">Choose a run mode</a>
+<a href="#configuration">Configure your workspace</a>
+<a href="#commands">Find your way around</a>
+<a href="#next-steps">Keep building</a></nav></aside>
+  </div>
+  <footer class="site-footer wrap"><a class="wordmark" href="../index.html"><span>PyLattice<span class="brand-dot">.</span></span></a><p>Made of Python. Open to possibility.</p><div><a href="./index.html">Documentation</a><a href="https://github.com/Protocol-Lattice/PyLattice">Source ↗</a><a href="https://github.com/Protocol-Lattice/PyLattice/issues">Report an issue ↗</a></div></footer>
+  <div class="docs-status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

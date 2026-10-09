@@ -4,6 +4,11 @@ Every agent service, the orchestration loop, the agent itself, and the terminal 
 replaceable factory slots. Select mods at startup through a TOML manifest, CLI overrides,
 or Python. Unspecified slots use built-ins; existing commands work without a manifest.
 
+New to mods? Follow the [website tutorial](../website/dist/docs/harness-mods.html)
+to create prompt and tool factories, wire a manifest, and verify an offline run.
+Preview the website as described in the [README](../README.md#website), then open
+`/docs/harness-mods.html`.
+
 ## Run the example
 
 From the project root:

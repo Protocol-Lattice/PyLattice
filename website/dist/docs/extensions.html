@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f6dbe4">
+  <meta name="description" content="Bring workflows, remembered context, and external tools into your terminal. Configure each piece around the workspace you are working in.">
+  <meta property="og:title" content="Extensions &amp; memory — PyLattice docs">
+  <meta property="og:description" content="Bring workflows, remembered context, and external tools into your terminal. Configure each piece around the workspace you are working in.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;family=IBM+Plex+Mono:wght@400;450;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./docs.css">
+  <script src="./docs.js" defer></script>
+  <title>Extensions &amp; memory — PyLattice docs</title>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header docs-header wrap">
+    <a class="wordmark" href="../index.html" aria-label="PyLattice home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 5 18 10.5v17L24 43 6 32.5v-17Z"/><path d="M6 15.5 24 26l18-10.5M24 26v17M24 5v14M6 32.5 24 19l18 13.5"/></svg><span>PyLattice<span class="brand-dot">.</span></span></a>
+    <nav class="docs-header-nav" aria-label="Main navigation"><a class="docs-home-link" href="../index.html">Home</a><a href="./index.html" aria-current="true">Docs</a><a href="https://github.com/Protocol-Lattice/PyLattice">GitHub ↗</a></nav>
+  </header>
+  <div class="docs-layout wrap">
+    <aside class="docs-sidebar"><nav aria-label="Documentation"><p class="docs-nav-label">Start here</p><a href="./index.html">Getting started</a>
+<a href="./code-mode.html">Code Mode</a>
+<p class="docs-nav-label">Customize</p><a href="./harness-mods.html">Harness mods</a>
+<a href="./extensions.html" aria-current="page">Extensions &amp; memory</a>
+<a class="docs-home" href="../index.html">← Back to PyLattice</a></nav></aside>
+    <main class="docs-article" id="main">
+      <div class="docs-breadcrumb"><a href="./index.html">Docs</a><span aria-hidden="true">/</span><span>Extensions &amp; memory</span></div>
+      <h1>Extensions &amp; memory</h1>
+      <p class="docs-lead">Bring workflows, remembered context, and external tools into your terminal. Configure each piece around the workspace you are working in.</p>
+      <div class="docs-meta"><span>GUIDE</span><span>SKILLS · MCP · HOOKS</span></div>
+      
+      <section id="skills" aria-labelledby="skills-title">
+<h2 id="skills-title">Add a skill</h2>
+<p>A skill is a directory containing a <code>SKILL.md</code> file with YAML metadata and Markdown instructions. PyLattice loads built-ins, plugin skills, workspace collections, and directories supplied with <code>--skills-dir</code>.</p><p>Create <code>.agents/skills/project-review/SKILL.md</code> in your workspace:</p><div class="docs-code" data-copy-label="SKILL.md">
+  <div class="docs-code-header"><span>SKILL.md</span></div>
+  <pre tabindex="0" aria-label="SKILL.md"><code>---
+name: project-review
+description: Review project changes and explain the checks performed.
+---
+
+Read the changed files and their callers.
+Look for behavior changes and missing error handling.
+Run focused checks and summarize findings with file references.</code></pre>
+</div><p>The name must match the directory and use lowercase letters, digits, and hyphens. <code>.agent-tui/skills/</code> is also a supported workspace collection. Restart the app after adding a skill, then use:</p><div class="docs-code" data-copy-label="Inside PyLattice · skills">
+  <div class="docs-code-header"><span>Inside PyLattice · skills</span></div>
+  <pre tabindex="0" aria-label="Inside PyLattice · skills"><code>/skills
+/skill project-review
+/skill off project-review</code></pre>
+</div><p><code>/skill NAME</code> pins a workflow across tasks. Mention <code>$project-review</code> in a task to activate it for that task and related follow-ups. The agent receives a short catalog and can load relevant skills when needed.</p>
+</section>
+<section id="plugins" aria-labelledby="plugins-title">
+<h2 id="plugins-title">Install plugin workflows</h2>
+<p>Use the plugin marketplace to add packaged skill collections:</p><div class="docs-code" data-copy-label="Inside PyLattice · plugins">
+  <div class="docs-code-header"><span>Inside PyLattice · plugins</span></div>
+  <pre tabindex="0" aria-label="Inside PyLattice · plugins"><code>/plugins
+/plugin install superpowers
+/skill superpowers:brainstorming</code></pre>
+</div><p>Use <code>/plugin enable NAME</code>, <code>/plugin disable NAME</code>, and <code>/plugin uninstall NAME</code> to manage installed plugins. Plugin skills use namespaced names in <code>/skills</code>.</p>
+</section>
+<section id="memory" aria-labelledby="memory-title">
+<h2 id="memory-title">Manage context and memory</h2>
+<p>The context manager builds task-relevant requests with a default 64,000-character budget. Persistent SQLite memory keeps workspace notes and run outcomes between sessions.</p><div class="docs-code" data-copy-label="Inside PyLattice · context and memory">
+  <div class="docs-code-header"><span>Inside PyLattice · context and memory</span></div>
+  <pre tabindex="0" aria-label="Inside PyLattice · context and memory"><code>/context
+/compact
+/memory
+/memory set test-command Run uv run pytest for the test suite.
+/memory search test
+/memory forget test-command</code></pre>
+</div><p><code>/compact</code> shortens conversation history. Use <code>--context-chars N</code> to change the context budget and <code>--no-memory</code> to disable persistent memory. The offline demo also disables persistent memory.</p>
+</section>
+<section id="mcp" aria-labelledby="mcp-title">
+<h2 id="mcp-title">Connect an MCP server</h2>
+<p>From the repository root, run the bundled server and hook configuration:</p><div class="docs-code" data-copy-label="Terminal · example extensions">
+  <div class="docs-code-header"><span>Terminal · example extensions</span></div>
+  <pre tabindex="0" aria-label="Terminal · example extensions"><code>uv run agent-tui --extensions examples/extensions.toml</code></pre>
+</div><p>For your own configuration, use <code>--extensions PATH</code> or the default workspace file <code>.agent-tui/extensions.toml</code>. This minimal configuration starts the included stdio server:</p><div class="docs-code" data-copy-label="extensions.toml · stdio server">
+  <div class="docs-code-header"><span>extensions.toml · stdio server</span></div>
+  <pre tabindex="0" aria-label="extensions.toml · stdio server"><code>[mcp_servers.example]
+transport = &quot;stdio&quot;
+command = &quot;python&quot;
+args = [&quot;examples/mcp_server.py&quot;]
+read_only_tools = [&quot;add&quot;]
+timeout = 15</code></pre>
+</div><p>Command paths and arguments are relative to the workspace. The example path above assumes the PyLattice repository is the workspace. The agent requests approval to connect; <code>/mcp</code> shows server status. Only explicitly listed <code>read_only_tools</code> are treated as read-only.</p><p>Streamable HTTP servers use a URL and can read credentials from environment variables:</p><div class="docs-code" data-copy-label="extensions.toml · HTTP server template">
+  <div class="docs-code-header"><span>extensions.toml · HTTP server template</span></div>
+  <pre tabindex="0" aria-label="extensions.toml · HTTP server template"><code>[mcp_servers.remote]
+transport = &quot;http&quot;
+url = &quot;http://localhost:8000/mcp&quot;
+headers = { Authorization = &quot;Bearer ${MCP_TOKEN}&quot; }
+timeout = 30</code></pre>
+</div><p>Replace the URL with your server endpoint and set <code>MCP_TOKEN</code> in your environment before connecting. A missing referenced environment variable is a configuration error.</p>
+</section>
+<section id="hooks" aria-labelledby="hooks-title">
+<h2 id="hooks-title">Run middleware hooks</h2>
+<p>Hooks run commands on harness events. Add hook entries to the same extensions TOML file:</p><div class="docs-code" data-copy-label="extensions.toml · hooks">
+  <div class="docs-code-header"><span>extensions.toml · hooks</span></div>
+  <pre tabindex="0" aria-label="extensions.toml · hooks"><code>[[hooks]]
+event = &quot;before_tool&quot;
+command = [&quot;python&quot;, &quot;examples/hooks/protect_files.py&quot;]
+timeout = 5
+
+[[hooks]]
+event = &quot;after_tool&quot;
+command = [&quot;python&quot;, &quot;examples/hooks/audit_log.py&quot;]
+timeout = 5</code></pre>
+</div><p>The bundled file policy blocks edits to lockfiles and <code>production.env</code>. The audit hook records event metadata. Commands run relative to the workspace and receive a JSON event on standard input; they can return a JSON object on standard output.</p><div class="docs-table" role="region" tabindex="0" aria-label="Hook events"><table><caption>Hook events</caption><thead><tr><th scope="col">Event</th><th scope="col">When it runs</th></tr></thead><tbody><tr><td><code>before_run</code></td><td>Before the task loop starts.</td></tr><tr><td><code>before_model</code></td><td>Before a model request.</td></tr><tr><td><code>before_tool</code></td><td>Before a tool executes; can return updated <code>arguments</code> or a <code>block</code> reason.</td></tr><tr><td><code>after_tool</code></td><td>After a tool result is available.</td></tr><tr><td><code>after_run</code></td><td>When run cleanup dispatches the outcome.</td></tr><tr><td><code>on_error</code></td><td>When the loop reports an error.</td></tr></tbody></table></div><p>Command hooks require approval and are disabled in read-only mode. The approval preview uses the final tool arguments after hook changes. Use <code>/hooks</code> to inspect configured hooks.</p>
+</section>
+<section id="go-further" aria-labelledby="go-further-title">
+<h2 id="go-further-title">Change the harness itself</h2>
+<p>Skills provide instructions, MCP adds tools, and hooks observe or adjust supported events. To replace a provider, prompt builder, tool registry, or other component, follow the <a href="./harness-mods.html">harness mods tutorial</a>.</p><div class="docs-note"><p><strong>Two configuration files, two roles.</strong> Extensions configure servers and hooks. Harness mods select Python factories and their options. You can pass <code>--extensions</code> and <code>--mods</code> together.</p></div>
+</section>
+      <nav class="docs-next" aria-label="Continue reading"><a href="#main">Back to top ↑</a><a href="./harness-mods.html">Build a harness mod →</a></nav>
+    </main>
+    <aside class="docs-toc"><p class="docs-nav-label">On this page</p><nav aria-label="On this page"><a href="#skills">Add a skill</a>
+<a href="#plugins">Install plugin workflows</a>
+<a href="#memory">Manage context and memory</a>
+<a href="#mcp">Connect an MCP server</a>
+<a href="#hooks">Run middleware hooks</a>
+<a href="#go-further">Change the harness itself</a></nav></aside>
+  </div>
+  <footer class="site-footer wrap"><a class="wordmark" href="../index.html"><span>PyLattice<span class="brand-dot">.</span></span></a><p>Made of Python. Open to possibility.</p><div><a href="./index.html">Documentation</a><a href="https://github.com/Protocol-Lattice/PyLattice">Source ↗</a><a href="https://github.com/Protocol-Lattice/PyLattice/issues">Report an issue ↗</a></div></footer>
+  <div class="docs-status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

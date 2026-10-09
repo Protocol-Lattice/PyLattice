@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f6dbe4">
+  <meta name="description" content="Connect tool calls with a small Python program. Keep intermediate results close, then return the observations the agent needs.">
+  <meta property="og:title" content="Code Mode — PyLattice docs">
+  <meta property="og:description" content="Connect tool calls with a small Python program. Keep intermediate results close, then return the observations the agent needs.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;family=IBM+Plex+Mono:wght@400;450;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./docs.css">
+  <script src="./docs.js" defer></script>
+  <title>Code Mode — PyLattice docs</title>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header docs-header wrap">
+    <a class="wordmark" href="../index.html" aria-label="PyLattice home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 5 18 10.5v17L24 43 6 32.5v-17Z"/><path d="M6 15.5 24 26l18-10.5M24 26v17M24 5v14M6 32.5 24 19l18 13.5"/></svg><span>PyLattice<span class="brand-dot">.</span></span></a>
+    <nav class="docs-header-nav" aria-label="Main navigation"><a class="docs-home-link" href="../index.html">Home</a><a href="./index.html" aria-current="true">Docs</a><a href="https://github.com/Protocol-Lattice/PyLattice">GitHub ↗</a></nav>
+  </header>
+  <div class="docs-layout wrap">
+    <aside class="docs-sidebar"><nav aria-label="Documentation"><p class="docs-nav-label">Start here</p><a href="./index.html">Getting started</a>
+<a href="./code-mode.html" aria-current="page">Code Mode</a>
+<p class="docs-nav-label">Customize</p><a href="./harness-mods.html">Harness mods</a>
+<a href="./extensions.html">Extensions &amp; memory</a>
+<a class="docs-home" href="../index.html">← Back to PyLattice</a></nav></aside>
+    <main class="docs-article" id="main">
+      <div class="docs-breadcrumb"><a href="./index.html">Docs</a><span aria-hidden="true">/</span><span>Code Mode</span></div>
+      <h1>Code Mode</h1>
+      <p class="docs-lead">Connect tool calls with a small Python program. Keep intermediate results close, then return the observations the agent needs.</p>
+      <div class="docs-meta"><span>GUIDE</span><span>ENABLED BY DEFAULT</span></div>
+      
+      <section id="how-it-works" aria-labelledby="how-it-works-title">
+<h2 id="how-it-works-title">How a turn works</h2>
+<ol><li>The decision model selects <code>execute_code</code> or <code>finish</code> using the latest result.</li><li>The executor writes the selected Python program or final answer.</li><li>Monty validates the program’s syntax and types, then runs it with an explicit tool bridge.</li><li>Tool results and the program’s output return to the agent for the next turn.</li></ol><p>On a routing fallback, the executor can choose between both tools. The activity panel shows nested tool calls; failed actions expand to show their errors.</p>
+</section>
+<section id="program" aria-labelledby="program-title">
+<h2 id="program-title">Write a tool program</h2>
+<p>This is the kind of program the executor sends as the raw <code>code</code> string of an <code>execute_code</code> call:</p><div class="docs-code" data-copy-label="Python · Code Mode program">
+  <div class="docs-code-header"><span>Python · Code Mode program</span></div>
+  <pre tabindex="0" aria-label="Python · Code Mode program"><code>listing = await call_tool(&quot;list_files&quot;, {&quot;path&quot;: &quot;src&quot;})
+results = []
+for path in listing[&quot;output&quot;][&quot;files&quot;][:3]:
+    result = await call_tool(&quot;read_file&quot;, {&quot;path&quot;: path})
+    results.append(result[&quot;output&quot;])
+results</code></pre>
+</div><p>Use top-level <code>await call_tool(name, arguments)</code> for each tool. Tool names and arguments must match the current catalog; tools are not Python functions. Use Python <code>True</code>, <code>False</code>, and <code>None</code> inside the program.</p><p>The final expression and printed output return to the model. Variables stay within one program and do not persist between turns. No <code>asyncio.run</code> wrapper is needed.</p>
+</section>
+<section id="responses" aria-labelledby="responses-title">
+<h2 id="responses-title">Read a tool response</h2>
+<p>Chat tool replies and <code>call_tool</code> share four fields:</p><div class="docs-code">
+  <div class="docs-code-header"><span>JSON · successful tool response</span></div>
+  <pre tabindex="0" aria-label="JSON · successful tool response"><code>{
+  &quot;ok&quot;: true,
+  &quot;output&quot;: {&quot;content&quot;: &quot;1: example text&quot;, &quot;has_more&quot;: false},
+  &quot;error&quot;: null,
+  &quot;truncated&quot;: false
+}</code></pre>
+</div><div class="docs-table" role="region" tabindex="0" aria-label="Response fields"><table><caption>Response fields</caption><thead><tr><th scope="col">Field</th><th scope="col">Meaning</th></tr></thead><tbody><tr><td><code>ok</code></td><td>Whether the tool succeeded.</td></tr><tr><td><code>output</code></td><td>Native JSON data or plain text. Do not JSON-decode it a second time.</td></tr><tr><td><code>error</code></td><td><code>null</code> on success; otherwise <code>code</code>, <code>message</code>, and a nullable <code>retry_hint</code>.</td></tr><tr><td><code>truncated</code></td><td>Whether output was shortened. Check it before relying on the result.</td></tr></tbody></table></div><p><code>read_file</code> text is in <code>result["output"]["content"]</code> and includes display line numbers. Strip those prefixes from exact edit patches, and check <code>has_more</code> for additional content.</p><p>MCP replies preserve typed <code>content</code> blocks and a separate <code>structured_content</code> value. Unsupported media is represented by an omitted-block marker.</p>
+</section>
+<section id="limits" aria-labelledby="limits-title">
+<h2 id="limits-title">Execution and limits</h2>
+<p>Programs run in a Monty sandbox without direct host filesystem or network access. Tool calls pass through schema validation, middleware, workspace restrictions, and normal approvals.</p><div class="docs-table" role="region" tabindex="0" aria-label="Default program limits"><table><caption>Default program limits</caption><thead><tr><th scope="col">Resource</th><th scope="col">Limit</th></tr></thead><tbody><tr><td>Tool calls</td><td>32 per program</td></tr><tr><td>Computation</td><td>5 seconds, excluding tools and approval waits</td></tr><tr><td>Memory</td><td>64 MiB</td></tr><tr><td>Output</td><td>Bounded; inspect truncation metadata</td></tr></tbody></table></div><p>Use <code>--read-only</code> to disable mutating tools. <code>--yes</code> automatically approves actions, MCP connections, and hooks; use it only in trusted workspaces. Press <kbd>Esc</kbd> to cancel a running program.</p>
+</section>
+<section id="errors" aria-labelledby="errors-title">
+<h2 id="errors-title">Recover from an error</h2>
+<p>Missing awaits, undefined names, invalid bridge arguments, and unsupported imports are rejected before tools run. The error includes a <code>phase</code>, a tool log, and a <code>retry_hint</code>.</p><ul><li><strong>Validation failure:</strong> correct the program and submit it again.</li><li><strong>Runtime or tool failure:</strong> inspect the tool log and current workspace state before retrying. A failed tool raises and prevents later calls in that program from running.</li><li><strong>Partial output:</strong> failed commands can retain useful structured output alongside their error.</li></ul><div class="docs-note"><p><strong>Actions are not rolled back.</strong> Tool calls that succeeded before a runtime failure may already have changed the workspace. Check those changes before repeating the program.</p></div>
+</section>
+      <nav class="docs-next" aria-label="Continue reading"><a href="#main">Back to top ↑</a><a href="./extensions.html">Connect skills and tools →</a></nav>
+    </main>
+    <aside class="docs-toc"><p class="docs-nav-label">On this page</p><nav aria-label="On this page"><a href="#how-it-works">How a turn works</a>
+<a href="#program">Write a tool program</a>
+<a href="#responses">Read a tool response</a>
+<a href="#limits">Execution and limits</a>
+<a href="#errors">Recover from an error</a></nav></aside>
+  </div>
+  <footer class="site-footer wrap"><a class="wordmark" href="../index.html"><span>PyLattice<span class="brand-dot">.</span></span></a><p>Made of Python. Open to possibility.</p><div><a href="./index.html">Documentation</a><a href="https://github.com/Protocol-Lattice/PyLattice">Source ↗</a><a href="https://github.com/Protocol-Lattice/PyLattice/issues">Report an issue ↗</a></div></footer>
+  <div class="docs-status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

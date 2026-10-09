@@ -5,6 +5,6 @@
   "description": "The PyLattice product website, inspired by app.tcss.",
   "scripts": {
     "start": "python3 -m http.server 4173 --bind 127.0.0.1 --directory dist",
-    "check": "node --check dist/app.js"
+    "check": "node --check dist/app.js && node --check dist/docs/docs.js"
   }
 }

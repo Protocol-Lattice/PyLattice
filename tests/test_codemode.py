@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 from dataclasses import replace
 
@@ -669,12 +670,16 @@ async def test_agent_recovers_from_validation_error_without_replaying_a_write(se
 async def test_prompt_inspection_example_runs_against_real_tool_shapes(settings, tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "example.py").write_text("example = True\n")
-    code = CODE_PROMPT.split("Example Python source for bounded inspection:\n", 1)[1]
+    code = CODE_PROMPT.split(
+        "Example Python source for bounded inspection in one host tool call:\n", 1
+    )[1]
     agent, executor = agent_for(settings, code)
     result = await agent.run("Inspect", ignore, deny)
     assert result.status == "completed" and result_before(executor)["ok"]
     output = result_before(executor)["output"]["output"]
-    assert output["files"][0]["content"] == "1: example = True"
+    assert output["files"][0]["content"] == "example = True\n"
+    assert output["files"][0]["sha256"]
+    assert "src/example.py" in agent.context.workspace_sources
     assert output["truncated"] is False
 
 
@@ -812,3 +817,57 @@ async def test_failed_nested_tool_keeps_its_error_code_and_partial_output(settin
     nested = reply["output"]["tools"][0]
     assert nested["error"] == reply["error"]
     assert nested["output"] == {"completed": 2, "remaining": 1}
+
+
+async def test_code_mode_reuses_one_monty_pool_and_repository_context_between_programs(
+    settings, tmp_path, monkeypatch
+):
+    from agent_tui import defaults
+
+    source = tmp_path / "source.py"
+    source.write_text("VALUE = 1\n")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_pool = defaults.AsyncMonty
+    constructed = []
+
+    def make_pool(*args, **kwargs):
+        pool = original_pool(*args, **kwargs)
+        constructed.append(pool)
+        return pool
+
+    monkeypatch.setattr(defaults, "AsyncMonty", make_pool)
+    changes = {
+        "changes": [
+            {
+                "action": "edit", "path": "source.py",
+                "old_text": "VALUE = 1", "new_text": "VALUE = 2",
+                "expected_sha256": digest,
+            },
+            {"action": "create", "path": "new.py", "content": "NEW = True\n"},
+        ],
+    }
+    agent, executor = agent_for(
+        settings,
+        'result = await call_tool("context_collect", {"paths": ["source.py"]})\n'
+        'result["output"]',
+        "result = await call_tool('apply_patchset', " + repr(changes) + ")\nresult['output']",
+        'result = await call_tool("context_collect", {"paths": ["source.py", "new.py"]})\n'
+        'result["output"]',
+        auto_approve=True,
+    )
+    result = await agent.run("Refactor VALUE", ignore, deny)
+    assert result.status == "completed", result.message
+    assert len(constructed) == 1
+    assert agent.code_runtime._pool is None
+    assert source.read_text() == "VALUE = 2\n"
+    assert (tmp_path / "new.py").read_text() == "NEW = True\n"
+    # The next model invocation receives a verified source cache reference.
+    source_messages = [
+        message for message in executor.requests[1][0]
+        if "Repository source cache" in (message.get("content") or "")
+    ]
+    assert len(source_messages) == 1
+    assert source_messages[0]["role"] == "user"
+    assert "source.py" in source_messages[0]["content"]
+    assert "VALUE = 1" in source_messages[0]["content"]
+    assert "VALUE = 2" in agent.context.workspace_context("VALUE")

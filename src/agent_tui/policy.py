@@ -80,6 +80,7 @@ class DefaultToolPolicy:
                 "read_file",
                 "list_files",
                 "search_files",
+                "context_collect",
                 "execute_code",
             }:
                 run_tools.repeats.pop(fingerprint, None)

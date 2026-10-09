@@ -864,7 +864,7 @@ async def test_code_mode_reuses_one_monty_pool_and_repository_context_between_pr
     # The next model invocation receives a verified source cache reference.
     source_messages = [
         message for message in executor.requests[1][0]
-        if "Repository source cache" in message.get("content", "")
+        if "Repository source cache" in (message.get("content") or "")
     ]
     assert len(source_messages) == 1
     assert source_messages[0]["role"] == "user"

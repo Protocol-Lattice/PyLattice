@@ -152,13 +152,13 @@ class ContextManager:
         for _, _, path, source in ranked[:8]:
             if remaining < 180:
                 break
-            header = f"\\n--- {path} sha256={source.sha256} ---\\n"
+            header = f"\n--- {path} sha256={source.sha256} ---\n"
             allowance = min(2200, remaining - len(header) - 80)
             if allowance <= 0:
                 break
             excerpt = source.content[:allowance]
             if len(excerpt) < len(source.content):
-                excerpt += "\\n[Cached file excerpt; context_collect can recall more]"
+                excerpt += "\n[Cached file excerpt; context_collect can recall more]"
             chunk = header + excerpt
             lines.append(chunk)
             remaining -= len(chunk)

@@ -319,10 +319,11 @@ async def execute_code(
         failure = failure or "Return JSON-compatible data from the final expression"
         output = None
     payload = {"output": output, "stdout": printed.output, "tools": calls}
+    retry_hint: str | None = None
     if failure:
         payload["error"] = failure
         payload["phase"] = phase
-        payload["retry_hint"] = (
+        retry_hint = (
             "No tools ran. Fix the reported Python error and submit a new execute_code call. "
             "Use raw Python without Markdown fences, await call_tool(name, arguments), "
             "Python True/False/None, and a final JSON-compatible expression."
@@ -330,6 +331,7 @@ async def execute_code(
             else "Inspect the tools log and current state before retrying in a new program. "
             "Earlier successful actions were not rolled back. Do not bypass denied approvals."
         )
+        payload["retry_hint"] = retry_hint
     text = settings.redact(json.dumps(payload, ensure_ascii=False, allow_nan=False))
     truncated = len(text) > settings.max_output_chars
     if truncated:
@@ -358,6 +360,6 @@ async def execute_code(
             failure,
             tool_failure.retry_hint
             if tool_failure and tool_failure.retry_hint
-            else payload["retry_hint"],
+            else retry_hint,
         )
     return ToolResult(not failure, text, error, truncated)

@@ -22,6 +22,7 @@ from textual.widgets import Button, Collapsible, Footer, Input, Label, Markdown,
 from textual.worker import Worker
 
 from .agent import Agent
+from .branding import logo_widget
 from .config import Settings
 from .models import AgentEvent
 from .mods import create_agent
@@ -36,7 +37,8 @@ class MessageCard(Vertical):
 
     def compose(self) -> ComposeResult:
         label = {"YOU": "you", "ASSISTANT": "pylattice"}.get(self.role, self.role)
-        yield Static(label, classes="message-role", markup=False)
+        if label:
+            yield Static(label, classes="message-role", markup=False)
         yield Markdown(self.content, classes="message-body")
 
 
@@ -141,7 +143,8 @@ class AgentApp(App):
                 )
                 yield Button("×", id="close", tooltip="Quit (Ctrl+C)")
             with Horizontal(id="masthead"):
-                yield Static("⬡  PyLattice", id="brand")
+                yield logo_widget()
+                yield Static("PyLattice", id="brand")
                 mode = (
                     "OFFLINE DEMO"
                     if self.settings.demo
@@ -367,7 +370,7 @@ class AgentApp(App):
         now = datetime.now().strftime("%H:%M:%S")
         color = getattr(self.current_theme, tone, None) or self.current_theme.foreground
         self.query_one("#activity", RichLog).write(
-            Text(f"{now}  {self.settings.redact(text)}", style=color)
+            Text(f"{now}  {self.settings.redact(text)}", style=color or "")
         )
 
     def _update_elapsed(self) -> None:

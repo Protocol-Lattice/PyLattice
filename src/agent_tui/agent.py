@@ -9,12 +9,12 @@ from typing import Any
 from harness_router import HarnessState, RouteDecision, ToolDescriptor
 
 from .config import Settings
-from .contracts import DecisionLayer, Executor
+from .contracts import Executor, Router, TaskPlanner
 from .middleware import MiddlewareManager
 from .models import AgentEvent, Approval, EventSink, RunResult, ToolCall
 from .mods import ModRuntime
 from .openrouter import ExecutorError
-from .planner import Plan, Planner, PlanningError
+from .planner import Plan, PlanningError
 from .policy import RunTools
 from .tools import ToolRegistry, ToolResult
 
@@ -23,10 +23,10 @@ class Agent:
     def __init__(
         self,
         settings: Settings,
-        router: DecisionLayer | None = None,
+        router: Router | None = None,
         executor: Executor | None = None,
         registry: ToolRegistry | None = None,
-        planner: Planner | None = None,
+        planner: TaskPlanner | None = None,
         middleware: MiddlewareManager | None = None,
         *,
         subagent_factory: Callable[[], Agent] | None = None,
@@ -35,7 +35,7 @@ class Agent:
     ) -> None:
         self.settings = settings
         if runtime is None:
-            instances = {
+            instances: dict[str, Any] = {
                 name: value
                 for name, value in {
                     "router": router,

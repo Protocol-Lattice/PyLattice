@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 DEFAULT_CONTEXT_CHARS = 64_000
 
@@ -84,7 +85,7 @@ class Settings:
 
     @classmethod
     def from_env(cls, workspace: Path, **overrides: object) -> Settings:
-        values = {
+        values: dict[str, Any] = {
             "workspace": workspace,
             "api_key": os.getenv("OPENROUTER_API_KEY", "").strip(),
             "model": os.getenv("AGENT_TUI_MODEL", "openrouter/free"),

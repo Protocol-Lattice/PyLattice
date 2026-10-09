@@ -42,7 +42,7 @@ class DefaultLoop:
             ],
         )
         if agent.history:
-            state.observation += (
+            state.observation = (state.observation or "") + (
                 " Previous turn: " + json.dumps(agent.history[-1], ensure_ascii=False)[-3500:]
             )
         step = 0

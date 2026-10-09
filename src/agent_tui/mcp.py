@@ -9,17 +9,22 @@ import os
 import re
 from contextlib import AsyncExitStack
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from harness_router import RiskLevel
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import CallToolResult, PaginatedRequestParams
 
 from .config import Settings
 from .extensions import MCPServerConfig, expand_environment, safe_environment
 from .models import AgentEvent, Approval, EventSink
 from .tools import ToolError, ToolFailure, ToolRegistry, ToolResult, ToolSpec
+
+
+class ToolSession(Protocol):
+    async def call_tool(self, name: str, arguments: dict[str, Any], /) -> CallToolResult: ...
 
 
 def tool_name(server: str, name: str) -> str:
@@ -98,7 +103,7 @@ class MCPManager:
                 cursor = None
                 seen: set[str] = set()
                 while True:
-                    listing = await session.list_tools(cursor=cursor)
+                    listing = await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
                     for tool in listing.tools:
                         name = tool_name(server.name, tool.name)
                         readonly = tool.name in server.read_only_tools
@@ -142,7 +147,7 @@ class MCPManager:
                     )
                 )
 
-    def _handler(self, session: ClientSession, server: MCPServerConfig, name: str):
+    def _handler(self, session: ToolSession, server: MCPServerConfig, name: str):
         async def execute(arguments: dict[str, Any]) -> ToolResult:
             try:
                 async with asyncio.timeout(server.timeout):
@@ -157,7 +162,7 @@ class MCPManager:
                 error = None
                 if result.isError:
                     detail = "\n".join(
-                        block["text"] for block in content if block["type"] == "text"
+                        block.text for block in result.content if block.type == "text"
                     )
                     if not detail and isinstance(result.structuredContent, dict):
                         detail = str(result.structuredContent.get("error", ""))

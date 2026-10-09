@@ -349,7 +349,8 @@ async def test_builtin_tools_can_be_removed(settings):
     assert "run_command" not in {item.name for item in tools.descriptors()}
     assert tools.schemas("run_command") == []
     result = await tools.execute("run_command", {"argv": ["never-run"]})
-    assert not result.ok and result.error.code == "unavailable_tool"
+    assert not result.ok
+    assert result.error is not None and result.error.code == "unavailable_tool"
 
 
 async def test_replaced_builtin_can_change_schema_and_keeps_validation(settings):

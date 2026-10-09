@@ -17,17 +17,26 @@ if TYPE_CHECKING:
     from .policy import RunTools
 
 
-class DecisionLayer(Protocol):
+class Router(Protocol):
+    """Routing required in every mode; MCTS is an additional capability."""
+
     async def route(
-        self, state: HarnessState, tools: Sequence[ToolDescriptor]
+        self, state: HarnessState, tools: Sequence[ToolDescriptor], /
     ) -> RouteDecision: ...
 
+
+class DecisionLayer(Router, Protocol):
     async def route_mcts(
         self,
         state: HarnessState,
         tools: Sequence[ToolDescriptor],
         plan: Plan,
+        /,
     ) -> MCTSResult: ...
+
+
+class TaskPlanner(Protocol):
+    async def plan(self, state: HarnessState, tools: Sequence[ToolDescriptor], /) -> Plan: ...
 
 
 class Executor(Protocol):
@@ -37,6 +46,7 @@ class Executor(Protocol):
         schemas: list[dict[str, Any]],
         selected: str | None,
         on_token: TokenSink,
+        /,
     ) -> Completion: ...
 
 

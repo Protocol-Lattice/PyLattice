@@ -12,11 +12,12 @@ dependencies = [
   "harness-router @ git+https://github.com/Protocol-Lattice/harness-router.git@51d1acd6d16e7d0656893b8f8475deb9a9bf60e0",
   "httpx>=0.28,<1",
   "jsonschema>=4.23,<5",
-  "mcp>=1.12,<2",
+  "mcp>=1.20,<2",
   "pydantic-monty>=1.1,<2",
   "python-dotenv>=1.0,<2",
   "pyyaml>=6,<7",
   "textual>=1.0,<7",
+  "textual-image[textual]>=0.12,<0.15",
 ]
 
 [project.scripts]

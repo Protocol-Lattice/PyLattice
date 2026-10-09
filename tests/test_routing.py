@@ -53,6 +53,7 @@ async def test_provider_failure_is_visible_and_falls_back(settings):
         layer = HarnessDecisionLayer(settings, client)
         result = await layer.route(HarnessState(goal="hi"), ToolRegistry(settings).descriptors())
     assert result.fallback
+    assert result.fallback_reason is not None
     assert "402" in result.fallback_reason
     assert "Insufficient credits" in result.fallback_reason
 

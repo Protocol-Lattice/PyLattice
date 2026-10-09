@@ -197,7 +197,7 @@ async def test_cancellation_during_code_mode_routing_does_not_reach_executor(set
     entered = asyncio.Event()
 
     class WaitingRouter(CodeDecisions):
-        async def route(self, *_):
+        async def route(self, state, tools):
             entered.set()
             await asyncio.Future()
 

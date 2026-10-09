@@ -40,21 +40,23 @@ Screen {
 #close:hover, #close:focus { background: $primary; text-style: bold; }
 
 #masthead {
-    height: 3;
-    padding: 1 4;
+    height: 4;
+    padding: 1 4 0 4;
 }
 
-#brand { width: 1fr; height: 1; color: $primary; text-style: bold; }
-#stack-label { width: auto; height: 1; color: $secondary; }
+#brand-logo { width: auto; height: 3; margin-right: 2; }
+#brand-logo.unavailable { display: none; }
+#brand { width: 1fr; height: 3; content-align: left middle; color: $primary; text-style: bold; }
+#stack-label { width: auto; height: 3; content-align: right middle; color: $secondary; }
 
 #workspace-bar {
     height: 2;
     padding: 0 4;
 }
 
-#branch { display: none; width: auto; max-width: 30; height: 1; margin-right: 2; color: $secondary; }
+#branch { display: none; width: auto; max-width: 30; height: 1; margin-right: 2; color: $secondary; text-overflow: ellipsis; }
 #branch.has-branch { display: block; }
-#workspace { width: 1fr; height: 1; color: $secondary; }
+#workspace { width: 1fr; height: 1; color: $secondary; text-wrap: nowrap; text-overflow: ellipsis; }
 #policy { width: auto; height: 1; margin-left: 2; color: $primary; }
 #body { height: 1fr; min-height: 1; }
 #conversation-pane { width: 1fr; }
@@ -300,7 +302,7 @@ ApprovalScreen { align: center middle; padding: 0; background: $foreground 35%; 
 /* Keep the design's spacing at 28 rows; compress only genuinely small terminals. */
 Screen.compact #sidebar { display: none; }
 .compact #window-bar { padding: 1 2; }
-.compact #masthead { padding: 1 3; }
+.compact #masthead { padding: 1 3 0 3; }
 .compact #workspace-bar { padding: 0 3; }
 .compact #conversation { padding: 0 3; }
 .compact #composer { padding: 1 3 0 3; }
@@ -308,14 +310,14 @@ Screen.compact #sidebar { display: none; }
 .compact .welcome { padding: 1 2; }
 
 .short #window-bar { height: 1; padding: 0 4; }
-.short #masthead { height: 2; padding: 1 4 0 4; }
+.short #masthead { height: 3; padding: 0 4; }
 .short #composer { height: 3; padding: 0 4; }
 .short #status-bar { height: 2; padding: 0 4 1 4; }
 .short .welcome { padding: 0 2; }
 .short .message-role { margin-bottom: 0; }
 .short .tool-card, .short .plan-card { padding-top: 0; padding-bottom: 0; }
 .short.compact #window-bar { padding: 0 3; }
-.short.compact #masthead { padding: 1 3 0 3; }
+.short.compact #masthead { padding: 0 3; }
 .short.compact #composer { padding: 0 3; }
 .short.compact #status-bar { padding: 0 3 1 3; }
 
@@ -323,13 +325,13 @@ Screen.narrow.compact { padding: 0; }
 .narrow #stack-label { display: none; }
 .narrow #branch { max-width: 12; margin-right: 1; }
 .narrow.compact #window-bar { padding: 1; }
-.narrow.compact #masthead { padding: 1; }
+.narrow.compact #masthead { padding: 1 1 0 1; }
 .narrow #workspace-bar { padding: 0 1; }
 .narrow #conversation { padding: 0 1; }
 .narrow.compact #composer { padding: 1 1 0 1; }
 .narrow.compact #status-bar { padding: 1; }
 .narrow.short #window-bar { padding: 0 1; }
-.narrow.short.compact #masthead { padding: 1 1 0 1; }
+.narrow.short.compact #masthead { padding: 0 1; }
 .narrow.short #composer { padding: 0 1; }
 .narrow.short #status-bar { padding: 0 1 1 1; }
 .narrow #composer-label, .narrow #status-dot { display: none; }

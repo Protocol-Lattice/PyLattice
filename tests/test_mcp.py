@@ -4,9 +4,9 @@ import asyncio
 import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from agent_tui.extensions import MCPServerConfig
 from agent_tui.mcp import MCPManager, tool_name
@@ -27,11 +27,11 @@ async def ignore(*_):
 async def test_mcp_keeps_text_and_structured_data_in_separate_fields(settings, is_error):
     class Session:
         async def call_tool(self, name, arguments):
-            return SimpleNamespace(
+            return CallToolResult(
                 isError=is_error,
                 content=[
-                    SimpleNamespace(type="text", text="Remote explanation"),
-                    SimpleNamespace(type="image", data="omitted-binary-data"),
+                    TextContent(type="text", text="Remote explanation"),
+                    ImageContent(type="image", data="omitted-binary-data", mimeType="image/png"),
                 ],
                 structuredContent={"items": [{"id": 7}], "count": 1},
             )
@@ -57,7 +57,7 @@ async def test_mcp_keeps_text_and_structured_data_in_separate_fields(settings, i
 async def test_empty_mcp_response_has_the_same_output_shape(settings):
     class Session:
         async def call_tool(self, name, arguments):
-            return SimpleNamespace(isError=False, content=[], structuredContent=None)
+            return CallToolResult(isError=False, content=[], structuredContent=None)
 
     manager = MCPManager(settings, ())
     handler = manager._handler(Session(), MCPServerConfig("example", command="unused"), "tool")
@@ -184,7 +184,7 @@ async def test_http_transport_headers_and_error_results(settings, monkeypatch):
         async def initialize(self):
             pass
 
-        async def list_tools(self, cursor=None):
+        async def list_tools(self, *, params=None):
             return SimpleNamespace(
                 tools=[
                     SimpleNamespace(

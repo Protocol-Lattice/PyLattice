@@ -29,6 +29,12 @@ export OPENROUTER_API_KEY=your_key_here
 uv run agent-tui
 ```
 
+The header displays the bundled PNG logo using Sixel or Kitty terminal graphics.
+For VS Code, this repository enables `terminal.integrated.enableImages` in
+`.vscode/settings.json`; open a new terminal after changing that setting. When running
+from another workspace, enable the same setting there or in your user settings.
+Terminals without image support show the PyLattice name without a character-art logo.
+
 Each request uses a 64,000-character context budget, task-relevant history, and a short skill catalog. Configure with:
 
 - `--context-chars N` or `AGENT_TUI_CONTEXT_CHARS` environment variable

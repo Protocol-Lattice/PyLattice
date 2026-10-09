@@ -114,10 +114,12 @@ class MiddlewareManager:
             return bytes(output)
 
         async def write() -> None:
+            stdin = process.stdin
+            assert stdin is not None  # Created with stdin=PIPE above.
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
-                process.stdin.write(payload)
-                await process.stdin.drain()
-            process.stdin.close()
+                stdin.write(payload)
+                await stdin.drain()
+            stdin.close()
 
         tasks = [
             asyncio.create_task(read(process.stdout)),

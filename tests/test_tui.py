@@ -160,6 +160,7 @@ async def test_stream_rendering_is_batched_and_flushes_last_tokens(settings, mon
     app = AgentApp(settings)
     async with app.run_test():
         await app._event(AgentEvent("token", "First ", step=1))
+        assert app._stream_card is not None
         markdown = app._stream_card.query_one(Markdown)
         update = markdown.update
         rendered = []

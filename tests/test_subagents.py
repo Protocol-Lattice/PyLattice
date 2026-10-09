@@ -184,7 +184,7 @@ async def test_stopping_parent_cancels_and_closes_all_children(settings):
     children = []
 
     class BlockingExecutor(Executor):
-        async def complete(self, *_):
+        async def complete(self, messages, schemas, selected, on_token):
             nonlocal started
             started += 1
             if started == 2:

@@ -521,10 +521,10 @@ class ToolRegistry:
         return path, old, new
 
     def _collect_context(self, args: dict[str, Any]) -> dict[str, Any]:
-        """One bounded filesystem scan, one policy-checked tool result.
+        """Scan metadata once; cache search text and retain chosen source in context.
 
-        The full selected source is retained by ContextManager, whereas the bridge
-        response contains only a small excerpt per file. No model/API calls occur.
+        Subsequent searches only stat unchanged files, then read the few winners.
+        Full sources stay with Context Manager and excerpts are bounded for the model.
         """
         query = args.get("query", "").strip()
         terms = keywords(query)
@@ -534,9 +534,11 @@ class ToolRegistry:
         )
         root = self.resolve(args.get("path", "."))
         requested = args.get("paths") or []
-        ranked: list[tuple[int, str, str]] = []
+        ranked: list[tuple[int, str, Path, str | None]] = []
         skipped = 0
         scanned_bytes = 0
+        disk_reads = 0
+        index_hits = 0
         scan_limit_reached = False
 
         if requested:
@@ -548,40 +550,67 @@ class ToolRegistry:
 
         for item in candidates:
             try:
-                size = item.stat().st_size
-                if size > MAX_FILE_BYTES:
+                info = item.stat()
+                if info.st_size > MAX_FILE_BYTES:
                     skipped += 1
                     continue
-                if not requested and scanned_bytes + size > 20_000_000:
+                if not requested and scanned_bytes + info.st_size > 20_000_000:
                     scan_limit_reached = True
                     break
-                scanned_bytes += size
-                content = self._read_text(item)
+                scanned_bytes += info.st_size
+                relative = str(item.relative_to(self.root))
+                content: str | None = None
+                if requested:
+                    # Preserve explicit path order, even if a scan query was supplied.
+                    score = len(requested) - requested.index(
+                        str(item.relative_to(self.root))
+                    ) if relative in requested else 1
+                elif not terms:
+                    # Listing a project should not read the source of every file.
+                    score = (
+                        3 if item.name in {"README.md", "pyproject.toml", "go.mod"}
+                        else 1 if item.suffix in {".py", ".go", ".ts", ".js", ".rs"}
+                        else 0
+                    )
+                else:
+                    folded, content, hit = self._indexed_text(
+                        item, size=info.st_size, mtime_ns=info.st_mtime_ns
+                    )
+                    disk_reads += not hit
+                    index_hits += hit
+                    path_hits = len(terms & keywords(relative))
+                    body_hits = sum(term in folded for term in terms)
+                    score = 6 * path_hits + body_hits
+                    if score == 0:
+                        continue
+                ranked.append((score, relative, item, content))
             except (OSError, UnicodeError, ToolError):
                 skipped += 1
                 continue
-            relative = str(item.relative_to(self.root))
-            if requested:
-                score = len(requested) - requested.index(relative) if relative in requested else 1
-            else:
-                path_hits = len(terms & keywords(relative))
-                body = content[:100_000].casefold()
-                body_hits = sum(1 for term in terms if term in body)
-                score = 6 * path_hits + body_hits
-                if terms and score == 0:
-                    continue
-                if not terms:
-                    score = 3 if item.name in {"README.md", "pyproject.toml", "go.mod"} else (
-                        1 if item.suffix in {".py", ".go", ".ts", ".js", ".rs"} else 0
-                    )
-            ranked.append((score, relative, content))
+
         if not requested:
             ranked.sort(key=lambda entry: (-entry[0], entry[1]))
         chosen = ranked[:max_files]
-        # Leave headroom for JSON keys, file paths and digests under output sanitization.
+        # Leave headroom for JSON keys, paths and digests under output sanitization.
         remaining = max_chars
         files: list[dict[str, Any]] = []
-        for position, (_, path, content) in enumerate(chosen):
+        for position, (_, path, source_path, content) in enumerate(chosen):
+            try:
+                if content is None:
+                    cached = (
+                        self.context.cached_file(path)
+                        if self.context is not None and hasattr(self.context, "cached_file")
+                        else None
+                    )
+                    if cached is not None:
+                        content = cached.content
+                    else:
+                        content = self._read_text(source_path)
+                        disk_reads += 1
+            except (OSError, UnicodeError, ToolError):
+                skipped += 1
+                continue
+
             slots = len(chosen) - position
             allowance = max(0, (remaining // slots) - 180)
             lower = content.casefold()
@@ -609,9 +638,11 @@ class ToolRegistry:
         return {
             "files": files,
             "scanned_bytes": scanned_bytes,
+            "disk_reads": disk_reads,
+            "index_hits": index_hits,
             "skipped": skipped,
-            "truncated": scan_limit_reached or len(ranked) > max_files or
-            any(item["excerpt"] for item in files),
+            "truncated": scan_limit_reached or len(ranked) > max_files
+            or any(item["excerpt"] for item in files),
         }
 
     def _patchset_preflight(self, args: dict[str, Any]) -> list[tuple[Path, str, str]]:

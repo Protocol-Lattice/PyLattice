@@ -111,7 +111,11 @@ class ContextManager:
                    parent.is_relative_to(self.settings.workspace)):
                 raise ValueError("Path is now a symlink")
             info = path.stat()
-            if not path.is_file() or info.st_size != source.size or info.st_mtime_ns != source.mtime_ns:
+            if (
+                not path.is_file()
+                or info.st_size != source.size
+                or info.st_mtime_ns != source.mtime_ns
+            ):
                 raise ValueError("File changed")
         except (OSError, ValueError):
             self.invalidate_file(relative_path)

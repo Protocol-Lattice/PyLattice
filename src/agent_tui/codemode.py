@@ -146,7 +146,7 @@ and blockers honestly. A direct final answer is allowed only when finish is sele
 routing falls back and no work remains; never answer directly when execute_code is selected.
 
 Example Python source for bounded inspection in one host tool call:
-result = await call_tool("context_collect", {"query": "router", "max_files": 4})
+result = await call_tool("context_collect", {"query": "example", "max_files": 4})
 {"files": result["output"]["files"], "truncated": result["output"]["truncated"]}
 """
 

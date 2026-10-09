@@ -194,7 +194,26 @@ SPECS = [
                             "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                         },
                         ["action", "path"],
-                    ),
+                    ) | {
+                        "oneOf": [
+                            {
+                                "properties": {"action": {"const": "edit"}},
+                                "required": ["old_text", "new_text"],
+                                "not": {"required": ["content"]},
+                            },
+                            {
+                                "properties": {"action": {"const": "create"}},
+                                "required": ["content"],
+                                "not": {
+                                    "anyOf": [
+                                        {"required": ["old_text"]},
+                                        {"required": ["new_text"]},
+                                        {"required": ["expected_sha256"]},
+                                    ]
+                                },
+                            },
+                        ]
+                    },
                 },
             },
             ["changes"],
@@ -411,15 +430,28 @@ class ToolRegistry:
             if selected is None or selected == spec.name
         ]
 
-    def validate(self, name: str, raw_arguments: str) -> dict[str, Any]:
+    def validate(self, name: str, raw_arguments: str | dict[str, Any]) -> dict[str, Any]:
         if name not in self.specs:
             raise ToolError(f"Tool is not available: {name}", code="unavailable_tool")
         try:
-            arguments = json.loads(raw_arguments)
+            if isinstance(raw_arguments, str):
+                arguments = json.loads(raw_arguments, parse_constant=_reject_nonfinite)
+                # Some OpenAI-compatible providers double-encode the argument object.
+                # Unwrap at most once and still validate against the exact tool schema.
+                if isinstance(arguments, str):
+                    arguments = json.loads(arguments, parse_constant=_reject_nonfinite)
+            elif isinstance(raw_arguments, dict):
+                # Enforce JSON-only values at the boundary, including finite numbers.
+                arguments = json.loads(
+                    json.dumps(raw_arguments, ensure_ascii=False, allow_nan=False),
+                    parse_constant=_reject_nonfinite,
+                )
+            else:
+                raise ValueError("Tool arguments must be a JSON object or encoded object")
             if not isinstance(arguments, dict):
                 raise ValueError("Tool arguments must be a JSON object")
             Draft202012Validator(self.specs[name].parameters).validate(arguments)
-        except (ValueError, ValidationError) as exc:
+        except (TypeError, ValueError, OverflowError, RecursionError, ValidationError) as exc:
             message = exc.message if isinstance(exc, ValidationError) else str(exc)
             raise ToolError(
                 f"Invalid arguments for {name}: {message[:400]}",
@@ -804,6 +836,12 @@ class ToolRegistry:
             self.validate(name, json.dumps(arguments))
             if name in self.handlers:
                 result = await self.handlers[name](arguments)
+                if not isinstance(result, ToolResult):
+                    raise ToolError(
+                        f"Tool {name} returned {type(result).__name__}; expected ToolResult",
+                        code="invalid_tool_response",
+                        retry_hint="Fix the tool handler to return ToolResult(ok, content).",
+                    )
                 return self.sanitize(result, name)
             if name == "run_command":
                 output = await self._run_command(**arguments)
@@ -828,11 +866,25 @@ class ToolRegistry:
                     "Inspect command output and current state before retrying.",
                 )
             result = ToolResult(ok, text, error)
-        except (ToolError, OSError, UnicodeError, ValueError) as exc:
+        except (ToolError, OSError, UnicodeError, ValueError, TypeError) as exc:
             result = ToolResult.from_error(exc)
         return self.sanitize(result, name)
 
     def sanitize(self, result: ToolResult, name: str | None = None) -> ToolResult:
+        if (
+            not isinstance(result, ToolResult)
+            or type(result.ok) is not bool
+            or not isinstance(result.content, str)
+            or (result.error is not None and not isinstance(result.error, ToolFailure))
+            or type(result.truncated) is not bool
+        ):
+            result = ToolResult.from_error(
+                ToolError(
+                    "Tool handler returned an invalid ToolResult; expected text content "
+                    "and a structured ToolFailure for errors",
+                    code="invalid_tool_response",
+                )
+            )
         text = self.settings.redact(result.content)
         limit = self.settings.max_output_chars
         truncated = result.truncated or len(text) > limit

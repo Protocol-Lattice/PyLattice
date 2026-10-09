@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -41,14 +42,132 @@ class ContextStats:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class WorkspaceSource:
+    """Last verified source body, not an LLM-generated summary."""
+
+    content: str
+    sha256: str
+    size: int
+    mtime_ns: int
+
+
 class ContextManager:
+    MAX_CACHED_FILES = 64
+    MAX_CACHED_BYTES = 4 * 1024 * 1024
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.history: list[list[dict[str, Any]]] = []
         self.stats = ContextStats(budget=settings.context_chars)
+        self.workspace_sources: OrderedDict[str, WorkspaceSource] = OrderedDict()
+        self._workspace_bytes = 0
+
+    def cache_file(self, relative_path: str, content: str) -> str:
+        """Store full validated source for later refactors; evict on content or stat changes.
+
+        Only ToolRegistry may supply paths and contents. It applies workspace, symlink
+        and credential rules before calling this method.
+        """
+        path = self.settings.workspace / relative_path
+        info = path.stat()
+        source = WorkspaceSource(
+            content=content,
+            sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            size=info.st_size,
+            mtime_ns=info.st_mtime_ns,
+        )
+        previous = self.workspace_sources.pop(relative_path, None)
+        if previous:
+            self._workspace_bytes -= len(previous.content.encode("utf-8"))
+        size = len(content.encode("utf-8"))
+        if size > self.MAX_CACHED_BYTES:
+            return source.sha256
+        self.workspace_sources[relative_path] = source
+        self._workspace_bytes += size
+        while (
+            len(self.workspace_sources) > self.MAX_CACHED_FILES
+            or self._workspace_bytes > self.MAX_CACHED_BYTES
+        ):
+            _, expired = self.workspace_sources.popitem(last=False)
+            self._workspace_bytes -= len(expired.content.encode("utf-8"))
+        return source.sha256
+
+    def invalidate_file(self, relative_path: str) -> None:
+        previous = self.workspace_sources.pop(relative_path, None)
+        if previous:
+            self._workspace_bytes -= len(previous.content.encode("utf-8"))
+
+    def cached_file(self, relative_path: str) -> WorkspaceSource | None:
+        """Never serve stale or redirected contents after an external edit."""
+        source = self.workspace_sources.get(relative_path)
+        if source is None:
+            return None
+        path = self.settings.workspace / relative_path
+        try:
+            # An existing parent can be replaced with a symlink after the first read.
+            if any(parent.is_symlink() for parent in (path, *path.parents)
+                   if parent != self.settings.workspace and
+                   parent.is_relative_to(self.settings.workspace)):
+                raise ValueError("Path is now a symlink")
+            info = path.stat()
+            if not path.is_file() or info.st_size != source.size or info.st_mtime_ns != source.mtime_ns:
+                raise ValueError("File changed")
+        except (OSError, ValueError):
+            self.invalidate_file(relative_path)
+            return None
+        self.workspace_sources.move_to_end(relative_path)
+        return source
+
+    def workspace_context(self, goal: str) -> str:
+        """Offer a bounded, relevant source snapshot across Code Mode programs.
+
+        The underlying cache stores entire files, while the model sees only relevant
+        excerpts; edits invalidate or refresh the cached versions.
+        """
+        if not self.workspace_sources:
+            return ""
+        terms = keywords(goal)
+        ranked: list[tuple[int, int, str, WorkspaceSource]] = []
+        for index, path in enumerate(list(self.workspace_sources)):
+            source = self.cached_file(path)
+            if source is None:
+                continue
+            score = 4 * len(terms & keywords(path)) + len(
+                terms & keywords(source.content[:4000])
+            )
+            ranked.append((score, index, path, source))
+        if not ranked:
+            return ""
+        # Relevant paths first; for short follow-ups preserve recently inspected files.
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        budget = min(9000, max(500, self.settings.context_chars // 8))
+        lines = [
+            "Repository source cache (verified by file size + mtime; "
+            "re-read or recollect when stale). "
+            "Use these exact snippets for edits; SHA-256 is usable as expected_sha256 "
+            "in apply_patchset:"
+        ]
+        remaining = budget - len(lines[0])
+        for _, _, path, source in ranked[:8]:
+            if remaining < 180:
+                break
+            header = f"\\n--- {path} sha256={source.sha256} ---\\n"
+            allowance = min(2200, remaining - len(header) - 80)
+            if allowance <= 0:
+                break
+            excerpt = source.content[:allowance]
+            if len(excerpt) < len(source.content):
+                excerpt += "\\n[Cached file excerpt; context_collect can recall more]"
+            chunk = header + excerpt
+            lines.append(chunk)
+            remaining -= len(chunk)
+        return "".join(lines)
 
     def clear(self) -> None:
         self.history.clear()
+        self.workspace_sources.clear()
+        self._workspace_bytes = 0
         self.stats = ContextStats(budget=self.settings.context_chars)
 
     def remember_turn(self, turn: list[dict[str, Any]]) -> None:

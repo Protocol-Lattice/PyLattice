@@ -72,6 +72,8 @@ class Agent:
         self.planner = runtime.get("planner")
         self.subagents = runtime.get("subagents") if runtime.allow_delegation else None
         self.tool_bindings.register(self.registry, self.skills, self.memory, self.subagents)
+        if hasattr(self.registry, "bind_context") and hasattr(self.context, "cache_file"):
+            self.registry.bind_context(self.context)
 
     @property
     def requires_api_key(self) -> bool:

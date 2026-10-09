@@ -694,7 +694,7 @@ class ToolRegistry:
         pending: list[tuple[Path, str, str, str, bool]] = []
         applied: list[tuple[Path, str, str, bool]] = []
         try:
-            for (path, old, new), change in zip(prepared, args["changes"]):
+            for (path, old, new), change in zip(prepared, args["changes"], strict=True):
                 # Approval may have taken time; re-check source before staging.
                 creating = change["action"] == "create"
                 if creating and path.exists():

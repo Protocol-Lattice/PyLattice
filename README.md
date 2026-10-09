@@ -197,6 +197,28 @@ required to use the defaults.
 
 ---
 
+## Website
+
+The product website is in `website/dist/`. Its pink and plum palette comes from
+`src/agent_tui/app.tcss` and the `jev-pink` theme in `tui.py`. It is a static site
+with no JavaScript dependencies or build step.
+
+Preview it locally with Python 3:
+
+```bash
+python3 -m http.server 4173 --bind 127.0.0.1 --directory website/dist
+```
+
+Open `http://127.0.0.1:4173`. From `website/`, `npm start` runs the same preview
+and `npm run check` checks the JavaScript syntax. Any static host can serve the
+contents of `website/dist/`.
+
+The interactive terminal uses simulated local examples; it does not execute
+agent tools or contact a model. Setup tabs provide normal and offline-demo
+commands. The site uses system font fallbacks when Google Fonts is unavailable.
+
+---
+
 ## License
 
 This project is open source. See the [LICENSE](LICENSE) file for details.

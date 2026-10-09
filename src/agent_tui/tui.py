@@ -32,7 +32,8 @@ class MessageCard(Vertical):
         self.content = content
 
     def compose(self) -> ComposeResult:
-        yield Static(self.role, classes="message-role", markup=False)
+        label = {"YOU": "you", "ASSISTANT": "pylattice"}.get(self.role, self.role)
+        yield Static(label, classes="message-role", markup=False)
         yield Markdown(self.content, classes="message-body")
 
 
@@ -60,6 +61,9 @@ class ApprovalScreen(ModalScreen[bool]):
     def on_mount(self) -> None:
         self.query_one("#deny", Button).focus()
 
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.width < 60, "narrow")
+
     @on(Button.Pressed, "#deny")
     def action_deny(self) -> None:
         self.dismiss(False)
@@ -70,16 +74,16 @@ class ApprovalScreen(ModalScreen[bool]):
 
 
 class AgentApp(App):
-    TITLE = "Agent TUI"
+    TITLE = "PyLattice"
     SUB_TITLE = "Harness Router × OpenRouter"
     CSS_PATH = "app.tcss"
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", priority=True),
-        Binding("escape", "stop", "Stop"),
-        Binding("ctrl+n", "new_chat", "New chat"),
-        Binding("ctrl+s", "save", "Save transcript"),
-        Binding("ctrl+l", "focus_prompt", "Focus prompt"),
-        Binding("ctrl+o", "toggle_activity", "Activity"),
+        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
+        Binding("escape", "stop", "stop", key_display="esc"),
+        Binding("ctrl+n", "new_chat", "New chat", show=False),
+        Binding("ctrl+s", "save", "Save transcript", show=False),
+        Binding("ctrl+l", "focus_prompt", "Focus prompt", show=False),
+        Binding("ctrl+o", "toggle_activity", "activity"),
     ]
 
     def __init__(
@@ -124,76 +128,86 @@ class AgentApp(App):
         self.transcript: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="masthead"):
-            yield Static("✦  Agent TUI", id="brand")
-            mode = (
-                "OFFLINE DEMO"
-                if self.settings.demo
-                else (
-                    "CODE MODE × OPENROUTER"
-                    if self.settings.code_mode
-                    else "HARNESS ROUTER × OPENROUTER"
-                )
-            )
-            yield Static(mode, id="stack-label")
-        with Horizontal(id="workspace-bar"):
-            yield Static(str(self.settings.workspace), id="workspace", markup=False)
-            policy = (
-                "READ ONLY"
-                if self.settings.read_only
-                else "AUTO APPROVE"
-                if self.settings.auto_approve
-                else "REVIEW ACTIONS"
-            )
-            yield Static(policy, id="policy")
-        with Horizontal(id="body"):
-            with Vertical(id="conversation-pane"), VerticalScroll(id="conversation"):
-                yield MessageCard(
-                    "READY WHEN YOU ARE",
-                    "## A workspace. A goal. A next step.\n\n"
-                    "Describe a task to inspect files, make changes, or run a check. "
-                    "Follow each tool decision in the activity panel.\n\n"
-                    "Try **“Explain this project”** or **“Find and fix the failing tests.”**\n\n"
-                    "`/help` commands · `Ctrl+O` activity · `Esc` stop",
-                    flavor="welcome",
-                )
-            with Vertical(id="sidebar"):
-                yield Static("EXECUTION", classes="section-title")
-                yield Static("● Idle", id="phase", markup=False)
-                method = (
-                    "Code Mode · Jev decisions + Python programs"
-                    if self.settings.code_mode
-                    else f"MCTS · {self.settings.mcts_simulations} simulations"
-                    if self.settings.routing == "mcts"
-                    else "Jev · direct routing"
-                )
-                yield Static(method, id="routing-mode", markup=False)
-                yield Static("DECISION MODEL", classes="field-label")
+        with Vertical(id="terminal-shell"):
+            with Horizontal(id="window-bar"):
+                yield Static("▧", id="window-mark")
                 yield Static(
-                    "offline/demo" if self.settings.demo else self.settings.router_model,
-                    id="router-model",
-                    markup=False,
+                    f"pylattice / {self.settings.workspace.name}", id="window-title", markup=False
                 )
-                yield Static("EXECUTOR", classes="field-label")
-                yield Static(
-                    "offline/demo" if self.settings.demo else self.settings.model,
-                    id="executor-model",
-                    markup=False,
+                yield Static(f"{self.size.width} × {self.size.height}", id="window-size")
+            with Horizontal(id="masthead"):
+                yield Static("⬡  PyLattice", id="brand")
+                mode = (
+                    "OFFLINE DEMO"
+                    if self.settings.demo
+                    else "CODE MODE"
+                    if self.settings.code_mode
+                    else "HARNESS ROUTER"
                 )
-                yield Static("NEXT TOOL", classes="field-label")
-                yield Static("Waiting for a task", id="next-tool", markup=False)
-                yield Static("0 steps  ·  0 calls\n0 tokens  ·  0.0s", id="metrics", markup=False)
-                yield Static("ACTIVITY", classes="section-title")
-                yield RichLog(
-                    id="activity", wrap=True, markup=False, highlight=False, max_lines=300
+                yield Static(mode, id="stack-label")
+            with Horizontal(id="workspace-bar"):
+                yield Static(str(self.settings.workspace), id="workspace", markup=False)
+                policy = (
+                    "read only"
+                    if self.settings.read_only
+                    else "auto approve"
+                    if self.settings.auto_approve
+                    else "approvals on"
                 )
-        with Vertical(id="composer"):
-            yield Static("Enter a task", id="composer-label")
-            with Horizontal(id="input-row"):
-                yield Input(placeholder="What should we work on?", id="prompt")
-                yield Button("Run  ↵", id="run", variant="primary")
+                yield Static(policy, id="policy")
+            with Horizontal(id="body"):
+                with Vertical(id="conversation-pane"), VerticalScroll(id="conversation"):
+                    yield MessageCard(
+                        "A fresh prompt. A place to begin.",
+                        "Tell me what you're building.  \nWe'll take it one step at a time.",
+                        flavor="welcome",
+                    )
+                with Vertical(id="sidebar"):
+                    yield Static("EXECUTION", classes="section-title")
+                    yield Static("● Idle", id="phase", markup=False)
+                    method = (
+                        "Code Mode · Jev decisions + Python programs"
+                        if self.settings.code_mode
+                        else f"MCTS · {self.settings.mcts_simulations} simulations"
+                        if self.settings.routing == "mcts"
+                        else "Jev · direct routing"
+                    )
+                    yield Static(method, id="routing-mode", markup=False)
+                    yield Static("DECISION MODEL", classes="field-label")
+                    yield Static(
+                        "offline/demo" if self.settings.demo else self.settings.router_model,
+                        id="router-model",
+                        markup=False,
+                    )
+                    yield Static("EXECUTOR", classes="field-label")
+                    yield Static(
+                        "offline/demo" if self.settings.demo else self.settings.model,
+                        id="executor-model",
+                        markup=False,
+                    )
+                    yield Static("NEXT TOOL", classes="field-label")
+                    yield Static("Waiting for a task", id="next-tool", markup=False)
+                    yield Static(
+                        "0 steps  ·  0 calls\n0 tokens  ·  0.0s", id="metrics", markup=False
+                    )
+                    yield Static("ACTIVITY", classes="section-title")
+                    yield RichLog(
+                        id="activity", wrap=True, markup=False, highlight=False, max_lines=300
+                    )
+            with Vertical(id="composer"), Horizontal(id="input-row"):
+                with Horizontal(id="prompt-field"):
+                    yield Static("›", id="prompt-prefix")
+                    yield Input(
+                        placeholder="Tell me what you're building…",
+                        id="prompt",
+                        tooltip="/help commands · Ctrl+N new chat · Ctrl+S save · Ctrl+C quit",
+                    )
+                yield Button("Run  →", id="run", variant="primary")
                 yield Button("Stop", id="stop", variant="error", disabled=True)
-        yield Footer()
+            with Horizontal(id="status-bar"):
+                yield Footer(show_command_palette=False)
+                yield Static("Ready when you are", id="composer-label", markup=False)
+                yield Static("●", id="status-dot")
 
     async def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
@@ -211,7 +225,11 @@ class AgentApp(App):
             self.call_after_refresh(self.submit_goal, "Show me how the execution loop works")
 
     def on_resize(self, event: events.Resize) -> None:
-        self.screen.set_class(event.size.width < 100, "compact")
+        for screen in self.screen_stack:
+            screen.set_class(event.size.width < 100, "compact")
+            screen.set_class(event.size.width < 60, "narrow")
+            screen.set_class(event.size.height < 32, "short")
+        self.query_one("#window-size", Static).update(f"{event.size.width} × {event.size.height}")
 
     def action_toggle_activity(self) -> None:
         self.screen.toggle_class("show-activity")
@@ -246,6 +264,7 @@ class AgentApp(App):
                 self.query_one("#run", Button).disabled = True
                 self.query_one("#stop", Button).disabled = False
                 self.query_one("#prompt", Input).disabled = True
+                self.query_one("#composer-label", Static).update("Installing · Esc to stop")
                 self._worker = self.run_worker(
                     self._install_plugin(goal.removeprefix("/plugin install ").strip()),
                     name="plugin-install",
@@ -286,7 +305,7 @@ class AgentApp(App):
             self.query_one("#run", Button).disabled = False
             self.query_one("#stop", Button).disabled = True
             self.query_one("#prompt", Input).disabled = False
-            self.query_one("#composer-label", Static).update("Enter a task or follow-up")
+            self.query_one("#composer-label", Static).update("Ready for a follow-up")
             self.query_one("#prompt", Input).focus()
 
     async def _approve(self, name: str, preview: str) -> bool:
@@ -409,7 +428,7 @@ class AgentApp(App):
             arguments = self.settings.redact(json.dumps(event.data["arguments"], indent=2))
             body = Static(arguments, markup=False, classes="tool-content")
             card = Collapsible(
-                body, title=f"{event.step:02d}  {event.text}", collapsed=True, classes="tool-card"
+                body, title=event.text, collapsed=True, classes="tool-card"
             )
             await self.query_one("#conversation", VerticalScroll).mount(card)
             self._tool_cards[(event.step, event.data.get("call_id", 0))] = (card, body, arguments)
@@ -423,7 +442,9 @@ class AgentApp(App):
             key = (event.step, event.data.get("call_id", 0))
             if key in self._tool_cards:
                 card, body, arguments = self._tool_cards[key]
-                card.title += f"  ·  {status}"
+                marker = "✓" if event.data["ok"] else "×"
+                card.title = f"{marker} {card.title}  ·  {status}"
+                card.set_class(not event.data["ok"], "failed")
                 body.update(f"ARGUMENTS\n{arguments}\n\nRESULT\n{event.text}")
                 if not event.data["ok"]:
                     card.collapsed = False
@@ -652,6 +673,7 @@ class AgentApp(App):
             self.query_one("#run", Button).disabled = False
             self.query_one("#stop", Button).disabled = True
             self.query_one("#prompt", Input).disabled = False
+            self.query_one("#composer-label", Static).update("Ready when you are")
             self.query_one("#prompt", Input).focus()
 
     async def action_new_chat(self) -> None:
@@ -666,6 +688,7 @@ class AgentApp(App):
         self.query_one("#phase", Static).update("● Idle")
         self.query_one("#next-tool", Static).update("Waiting for a task")
         self.query_one("#metrics", Static).update("0 steps  ·  0 calls\n0 tokens  ·  0.0s")
+        self.query_one("#composer-label", Static).update("Ready when you are")
         self.action_focus_prompt()
 
     async def action_save(self) -> None:

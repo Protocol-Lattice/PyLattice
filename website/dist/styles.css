@@ -444,10 +444,10 @@ h1 > span::after { position: absolute; z-index: -1; content: ""; bottom: 0; left
 .hero-visual::before { display: none; }
 .visual-coordinate { left: 0; right: 0; font-size: 9px; color: var(--foreground); letter-spacing: .4px; }
 .demo-stage { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--foreground); box-shadow: 5px 6px 0 var(--rule); background: var(--surface); }
-.terminal { border: 0; border-right: 1px solid var(--foreground); border-radius: 0; box-shadow: none; }
+.terminal { display: flex; flex-direction: column; border: 0; border-right: 1px solid var(--foreground); border-radius: 0; box-shadow: none; }
 .terminal-window { background: var(--foreground); color: var(--surface); border-bottom: 0; height: 31px; font-size: 9px; }
 .window-dimension { font-size: 11px; }
-.terminal-content { height: 335px; }
+.terminal-content { height: 335px; min-height: 335px; flex: 1; }
 .terminal-masthead { padding-top: 21px; font-size: 15px; }
 .transcript { font-size: 11px; }
 .welcome-message { border-radius: 0; }

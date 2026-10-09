@@ -1,33 +1,54 @@
-/* Quiet terminal chrome, a continuous transcript, and a soft pink canvas. */
+/* The website's terminal preview, laid out in terminal cells. */
 $rule: #d4acbd;
 
 Screen {
+    align: center middle;
+    padding: 1 2;
     background: $background;
     color: $foreground;
 }
 
-#masthead {
-    height: 2;
-    padding: 1 2 0 2;
+#terminal-shell {
+    width: 1fr;
+    max-width: 150;
+    height: 1fr;
+    border: solid $foreground;
     background: $background;
+    overflow: hidden;
 }
 
-#brand { width: 1fr; color: $primary; text-style: bold; }
-#stack-label { width: auto; color: $secondary; }
+/* Window chrome and the two-line workspace masthead. */
+#window-bar {
+    height: 3;
+    padding: 1 3;
+    background: $foreground;
+    color: $surface;
+}
+
+#window-mark { width: 4; height: 1; }
+#window-title { width: 1fr; height: 1; }
+#window-size { width: 10; height: 1; text-align: right; color: $surface 70%; }
+
+#masthead {
+    height: 2;
+    padding: 1 3 0 3;
+}
+
+#brand { width: 1fr; height: 1; color: $primary; text-style: bold; }
+#stack-label { width: auto; height: 1; color: $secondary; }
 
 #workspace-bar {
     height: 2;
-    padding: 0 2;
-    background: $background;
+    padding: 0 3;
 }
 
-#workspace { width: 1fr; color: $secondary; }
-#policy { width: auto; color: $primary; }
-#body { height: 1fr; }
+#workspace { width: 1fr; height: 1; color: $secondary; }
+#policy { width: auto; height: 1; margin-left: 2; color: $primary; }
+#body { height: 1fr; min-height: 1; }
 #conversation-pane { width: 1fr; }
 
 #conversation {
-    padding: 0 2;
+    padding: 0 3;
     background: $background;
     scrollbar-size: 1 1;
     scrollbar-color: $boost;
@@ -36,7 +57,7 @@ Screen {
     scrollbar-background: $background;
 }
 
-/* Messages read as terminal output, without a stack of filled cards. */
+/* One continuous transcript, with only the user's turn filled. */
 .message {
     height: auto;
     margin: 0 0 1 0;
@@ -46,27 +67,31 @@ Screen {
 
 .message-role {
     height: 1;
-    margin-bottom: 0;
     color: $primary;
     text-style: bold;
 }
 
 .message-body { height: auto; margin: 0; padding: 0; color: $foreground; }
-.user { background: $panel; border-left: solid $primary; padding: 0 1; }
-.user .message-role { color: $primary; }
+.user { background: $panel; border-left: solid $primary; }
 .assistant { border: none; }
 .notice { border-left: solid $warning; }
 .notice .message-role { color: $warning; }
 
 .welcome {
-    border: round $rule;
-    margin: 0 0 1 0;
+    border: solid $rule;
     padding: 1 2;
 }
 
-.welcome .message-role { color: $secondary; }
+.welcome .message-role {
+    height: auto;
+    margin-bottom: 1;
+    color: $secondary;
+    text-style: none;
+}
 
 Markdown { background: transparent; color: $foreground; }
+MarkdownParagraph { margin: 0 0 1 0; }
+.user MarkdownParagraph, .welcome MarkdownParagraph { margin: 0; }
 MarkdownH1, MarkdownH2, MarkdownH3 {
     border: none;
     padding: 0;
@@ -77,15 +102,16 @@ MarkdownH1, MarkdownH2, MarkdownH3 {
 
 MarkdownBlock > .link { color: $primary; text-style: underline; }
 MarkdownBlock > .link:hover { color: $accent; background: $panel; }
+MarkdownBlock > .code_inline { color: $primary; background: transparent; }
 
-/* Indented tool traces stay compact until expanded. */
+/* Tool details sit behind a small, indented disclosure row. */
 .tool-card, .plan-card {
     height: auto;
     margin: 0 0 1 1;
     padding: 0 0 0 1;
-    background: transparent;
     border: none;
     border-left: solid $rule;
+    background: transparent;
 }
 
 .tool-card:focus-within, .plan-card:focus-within {
@@ -106,15 +132,18 @@ CollapsibleTitle:hover, CollapsibleTitle:focus {
 }
 
 .plan-card CollapsibleTitle { color: $primary; }
-.tool-content { height: auto; padding: 0 1 1 1; color: $secondary; }
+.tool-card.failed { border-left: solid $error; }
+.tool-card.failed CollapsibleTitle { color: $error; }
+.tool-card > Contents, .plan-card > Contents { padding: 0; }
+.tool-content { height: auto; padding: 1 1 0 1; color: $secondary; }
 
-/* Optional diagnostics: Ctrl+O opens the rail on wider terminals. */
+/* Ctrl+O reveals the activity rail when there is room for it. */
 #sidebar {
     display: none;
     width: 30;
-    padding: 0 1;
-    background: $background;
+    padding: 0 2;
     border-left: solid $rule;
+    background: $background;
 }
 
 Screen.show-activity #sidebar { display: block; }
@@ -140,20 +169,31 @@ Screen.show-activity #sidebar { display: block; }
     scrollbar-background: $background;
 }
 
-/* A single prompt line anchors the conversation. */
-#composer { height: 5; padding: 0 2 1 2; background: $background; }
-#composer-label { height: 1; color: $secondary; }
+/* The prompt and its action meet at a single edge. */
+#composer { height: 4; padding: 1 3 0 3; }
 #input-row { height: 3; }
-#prompt {
+#prompt-field {
     width: 1fr;
     height: 3;
     padding: 0 1;
-    border: round $rule;
+    border: solid $rule;
+    border-right: none;
     background: $surface;
+}
+
+#prompt-field:focus-within { border: solid $primary; border-right: none; }
+#prompt-prefix { width: 3; height: 1; color: $primary; text-style: bold; }
+#prompt {
+    width: 1fr;
+    height: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
     color: $foreground;
 }
 
-#prompt:focus { border: round $primary; background-tint: transparent; }
+#prompt:focus { border: none; background-tint: transparent; }
+#prompt:disabled { opacity: 65%; }
 #prompt > .input--placeholder { color: $secondary; }
 #prompt > .input--cursor { color: $surface; background: $primary; }
 #prompt > .input--selection { background: $boost; }
@@ -168,32 +208,44 @@ Button {
 }
 
 Button:hover { background: $boost; border: tall $boost; }
-Button:focus { border: tall $primary; text-style: bold; }
+Button:focus { border: tall $primary; text-style: bold reverse; }
 Button:disabled { color: $secondary; opacity: 50%; }
-#run { width: 10; margin-left: 1; color: $surface; background: $primary; border: tall $primary; }
-#run:hover, #run:focus { background: $accent; border: tall $accent; }
-#stop { width: 8; margin-left: 1; color: $error; }
+#run {
+    width: 10;
+    color: $surface;
+    background: $primary;
+    border: none;
+}
 
+#run:hover, #run:focus { background: $accent; border: none; }
+#stop { width: 10; color: $surface; background: $error; border: none; }
+#run:disabled, #stop:disabled { display: none; }
+
+/* Keep the useful shortcuts and readiness next to the prompt. */
+#status-bar { height: 3; padding: 1 3; }
 Footer {
+    dock: none;
+    width: 1fr;
     height: 1;
-    padding: 0 2;
-    background: $background;
+    background: transparent;
     color: $secondary;
 }
 
-FooterKey, FooterLabel { background: $background; color: $secondary; }
-FooterKey > .footer-key--key { background: $background; color: $primary; text-style: bold; }
-FooterKey > .footer-key--description { background: $background; color: $secondary; }
+FooterKey, FooterLabel { background: transparent; color: $secondary; }
+FooterKey > .footer-key--key { background: transparent; color: $primary; text-style: bold; }
+FooterKey > .footer-key--description { background: transparent; color: $secondary; }
 FooterKey:hover, FooterKey:hover > .footer-key--key { background: $panel; color: $primary; }
+#composer-label { width: auto; height: 1; color: $secondary; }
+#status-dot { width: 2; height: 1; margin-left: 1; text-align: right; color: $success; }
 
-/* Approvals use the same palette, with a clear keyboard focus. */
-ApprovalScreen { align: center middle; background: $foreground 35%; }
+/* Approvals carry the same visual language and a clear keyboard focus. */
+ApprovalScreen { align: center middle; padding: 0; background: $foreground 35%; }
 #approval-dialog {
     width: 88%;
     max-width: 110;
     height: 85%;
     padding: 1 2;
-    border: round $primary;
+    border: solid $primary;
     background: $surface;
     color: $foreground;
 }
@@ -215,12 +267,41 @@ ApprovalScreen { align: center middle; background: $foreground 35%; }
 #approve { color: $surface; background: $primary; border: tall $primary; }
 #approve:hover, #approve:focus { background: $accent; border: tall $accent; }
 
-/* Preserve the prompt and transcript on smaller terminals. */
+/* Spend fewer cells on chrome as the terminal gets smaller. */
+Screen.compact { padding: 0 1; }
 Screen.compact #sidebar { display: none; }
-.compact #stack-label { display: none; }
-.compact #masthead, .compact #workspace-bar { padding-left: 1; padding-right: 1; }
-.compact #conversation { padding: 0 1; }
-.compact #composer { padding: 0 1 1 1; }
+.compact #window-bar { padding: 1 2; }
+.compact #masthead { padding: 1 2 0 2; }
+.compact #workspace-bar { padding: 0 2; }
+.compact #conversation { padding: 0 2; }
+.compact #composer { padding: 1 2 0 2; }
+.compact #status-bar { padding: 1 2; }
 .compact .welcome { padding: 0 1; }
-.compact .tool-card, .compact .plan-card { margin-left: 0; }
-.compact Footer { padding: 0 1; }
+
+Screen.short { padding: 0 2; }
+Screen.short.compact { padding: 0 1; }
+.short #window-bar { height: 1; padding: 0 3; }
+.short #masthead { height: 2; padding: 1 3 0 3; }
+.short #composer { height: 3; padding: 0 3; }
+.short #status-bar { height: 2; padding: 0 3 1 3; }
+.short .welcome { padding: 0 2; }
+.short.compact #window-bar { padding: 0 2; }
+.short.compact #masthead { padding: 1 2 0 2; }
+.short.compact #composer { padding: 0 2; }
+.short.compact #status-bar { padding: 0 2 1 2; }
+.short.compact .welcome { padding: 0 1; }
+
+Screen.narrow.compact { padding: 0; }
+.narrow #window-size, .narrow #stack-label { display: none; }
+.narrow.compact #window-bar { padding: 1; }
+.narrow.compact #masthead { padding: 1 1 0 1; }
+.narrow #workspace-bar { padding: 0 1; }
+.narrow #conversation { padding: 0 1; }
+.narrow.compact #composer { padding: 1 1 0 1; }
+.narrow.compact #status-bar { padding: 1; }
+.narrow.short #window-bar { padding: 0 1; }
+.narrow.short #composer { padding: 0 1; }
+.narrow.short #status-bar { padding: 0 1 1 1; }
+.narrow #composer-label, .narrow #status-dot { display: none; }
+.narrow .tool-card, .narrow .plan-card { margin-left: 0; }
+.narrow #approval-dialog { width: 100%; height: 100%; padding: 0 1; }

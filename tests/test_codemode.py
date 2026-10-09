@@ -862,11 +862,12 @@ async def test_code_mode_reuses_one_monty_pool_and_repository_context_between_pr
     assert source.read_text() == "VALUE = 2\n"
     assert (tmp_path / "new.py").read_text() == "NEW = True\n"
     # The next model invocation receives a verified source cache reference.
-    second_system = "\n".join(
-        message["content"] for message in executor.requests[1][0]
-        if message["role"] == "system"
-    )
-    assert "Repository source cache" in second_system
-    assert "source.py" in second_system
-    assert "VALUE = 1" in second_system
+    source_messages = [
+        message for message in executor.requests[1][0]
+        if "Repository source cache" in message.get("content", "")
+    ]
+    assert len(source_messages) == 1
+    assert source_messages[0]["role"] == "user"
+    assert "source.py" in source_messages[0]["content"]
+    assert "VALUE = 1" in source_messages[0]["content"]
     assert "VALUE = 2" in agent.context.workspace_context("VALUE")

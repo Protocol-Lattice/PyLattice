@@ -476,7 +476,9 @@ class ToolRegistry:
         query = args.get("query", "").strip()
         terms = keywords(query)
         max_files = args.get("max_files", 8)
-        max_chars = min(args.get("max_chars", 10000), max(500, self.settings.max_output_chars - 2500))
+        max_chars = min(
+            args.get("max_chars", 10000), max(500, self.settings.max_output_chars - 2500)
+        )
         root = self.resolve(args.get("path", "."))
         requested = args.get("paths") or []
         ranked: list[tuple[int, str, str]] = []
@@ -573,7 +575,9 @@ class ToolRegistry:
                 old = self._read_text(path)
                 digest = hashlib.sha256(old.encode("utf-8")).hexdigest()
                 if "expected_sha256" in item and item["expected_sha256"] != digest:
-                    raise ToolError(f"File changed since context collection: {relative}", code="file_changed")
+                    raise ToolError(
+                        f"File changed since context collection: {relative}", code="file_changed"
+                    )
                 if self.context is not None and hasattr(self.context, "cached_file"):
                     cached = self.context.cached_file(relative)
                     if cached is None or cached.sha256 != digest:

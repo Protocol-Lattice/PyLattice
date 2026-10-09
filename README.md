@@ -60,7 +60,11 @@ This performs one bounded filesystem scan and remembers the **full verified sour
 selected files in Context Manager. Later Code Mode programs automatically receive
 relevant excerpts, instead of re-reading the same files through many tool calls.
 Use `{"paths": ["src/first.py", "src/second.py"]}` to target exact paths.
-The result includes a SHA-256 for optimistic concurrency control.
+The result includes a SHA-256 for optimistic concurrency control. A bounded, metadata-
+validated search index (8 MiB) lets repeated searches skip unchanged disk reads.
+Responses report `index_hits` and `disk_reads` for performance diagnosis. To reproduce
+a cold-versus-warm scan comparison, run
+`python benchmarks/benchmark_repository_context.py` after installing the package.
 
 **Batched refactoring and file creation:**
 

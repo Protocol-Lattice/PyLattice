@@ -669,12 +669,16 @@ async def test_agent_recovers_from_validation_error_without_replaying_a_write(se
 async def test_prompt_inspection_example_runs_against_real_tool_shapes(settings, tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "example.py").write_text("example = True\n")
-    code = CODE_PROMPT.split("Example Python source for bounded inspection:\n", 1)[1]
+    code = CODE_PROMPT.split(
+        "Example Python source for bounded inspection in one host tool call:\n", 1
+    )[1]
     agent, executor = agent_for(settings, code)
     result = await agent.run("Inspect", ignore, deny)
     assert result.status == "completed" and result_before(executor)["ok"]
     output = result_before(executor)["output"]["output"]
-    assert output["files"][0]["content"] == "1: example = True"
+    assert output["files"][0]["content"] == "example = True\n"
+    assert output["files"][0]["sha256"]
+    assert "src/example.py" in agent.context.workspace_sources
     assert output["truncated"] is False
 
 

@@ -157,7 +157,9 @@ def test_schema_validation(settings, name, args):
 
 async def test_read_only_removes_and_denies_mutating_tools(readonly_settings):
     tools = ToolRegistry(readonly_settings)
-    assert set(tools.specs) == {"list_files", "read_file", "search_files", "finish"}
+    assert set(tools.specs) == {
+        "list_files", "read_file", "search_files", "context_collect", "finish"
+    }
     result = await tools.execute("write_file", {"path": "file", "content": "x"})
     assert not result.ok
 

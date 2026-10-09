@@ -592,16 +592,16 @@ class ToolRegistry:
     def _apply_patchset(self, args: dict[str, Any]) -> dict[str, Any]:
         """Preflight all files before writing and stage replacements on the same volume."""
         prepared = self._patchset_preflight(args)
-        pending: list[tuple[Path, str, str, str]] = []
+        pending: list[tuple[Path, str, str, str, bool]] = []
         applied: list[tuple[Path, str, str]] = []
         try:
-            for path, old, new in prepared:
+            for (path, old, new), change in zip(prepared, args["changes"]):
                 # Approval may have taken time; re-check source before staging.
-                if path.exists():
-                    if self._read_text(path) != old:
-                        raise ToolError("File changed since preflight", code="file_changed")
-                elif old:
-                    raise ToolError("File was removed since preflight", code="file_changed")
+                creating = change["action"] == "create"
+                if creating and path.exists():
+                    raise ToolError("File appeared since preflight", code="file_changed")
+                if not creating and (not path.exists() or self._read_text(path) != old):
+                    raise ToolError("File changed since preflight", code="file_changed")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
                 with tempfile.NamedTemporaryFile(
@@ -610,13 +610,13 @@ class ToolRegistry:
                     tmp.write(new)
                     staged = tmp.name
                 os.chmod(staged, mode)
-                pending.append((path, old, new, staged))
-            for path, old, new, staged in pending:
-                # Reject concurrent edits rather than silently clobbering new content.
-                if path.exists() and self._read_text(path) != old:
+                pending.append((path, old, new, staged, creating))
+            for path, old, new, staged, creating in pending:
+                # Reject concurrent creates as well as concurrent edits.
+                if creating and path.exists():
+                    raise ToolError("File appeared during patchset", code="file_changed")
+                if not creating and (not path.exists() or self._read_text(path) != old):
                     raise ToolError("File changed during patchset", code="file_changed")
-                if not path.exists() and old:
-                    raise ToolError("File disappeared during patchset", code="file_changed")
                 os.replace(staged, path)
                 applied.append((path, old, new))
             for path, _, new in applied:
@@ -633,6 +633,7 @@ class ToolRegistry:
                         ) as tmp:
                             tmp.write(old)
                             rollback = tmp.name
+                        os.chmod(rollback, stat.S_IMODE(path.stat().st_mode))
                         os.replace(rollback, path)
                     else:
                         path.unlink()
@@ -640,7 +641,7 @@ class ToolRegistry:
                     self.context.invalidate_file(str(path.relative_to(self.root)))
             raise
         finally:
-            for _, _, _, staged in pending:
+            for _, _, _, staged, _ in pending:
                 if os.path.exists(staged):
                     os.unlink(staged)
         return {
@@ -668,7 +669,7 @@ class ToolRegistry:
                     )
                 )
                 previews.append(diff or f"{relative}: no change")
-            return "\\n".join(previews)
+            return "\n".join(previews)
         if name in {"write_file", "edit_file"}:
             path, old, new = self._replacement(name, arguments)
             relative = str(path.relative_to(self.root))

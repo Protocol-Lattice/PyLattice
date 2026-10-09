@@ -2,7 +2,7 @@ name: PyLattice tests
 
 on:
   push:
-    branches: [main, feat/codemode-repository-context-fastpath]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -19,5 +19,12 @@ jobs:
         run: python -m pip install -e . "pytest>=8,<10" "pytest-asyncio>=0.25,<2" "ruff>=0.11,<1"
       - name: Compile Python sources
         run: python -m compileall -q src tests
+      - name: Lint Code Mode changes
+        run: |
+          python -m ruff check src/agent_tui/agent.py src/agent_tui/codemode.py \
+            src/agent_tui/context.py src/agent_tui/defaults.py src/agent_tui/loop.py \
+            src/agent_tui/policy.py src/agent_tui/prompts.py src/agent_tui/tools.py \
+            tests/test_agent.py tests/test_codemode.py tests/test_repository_context.py \
+            tests/test_tools.py
       - name: Run regression suite
         run: python -m pytest -q

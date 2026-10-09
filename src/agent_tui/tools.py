@@ -531,7 +531,14 @@ class ToolRegistry:
         for position, (_, path, content) in enumerate(chosen):
             slots = len(chosen) - position
             allowance = max(0, (remaining // slots) - 180)
-            excerpt = content[:allowance]
+            lower = content.casefold()
+            positions = [lower.find(term) for term in terms]
+            found = [position for position in positions if position >= 0]
+            anchor = min(found) if found else 0
+            offset = max(0, anchor - allowance // 3)
+            if offset:
+                offset = content.rfind("\n", 0, offset) + 1
+            excerpt = content[offset : offset + allowance]
             remaining -= len(excerpt) + 180
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if self.context is not None and hasattr(self.context, "cache_file"):
@@ -541,8 +548,9 @@ class ToolRegistry:
                     "path": path,
                     "sha256": digest,
                     "content": excerpt,
+                    "start_line": content.count("\n", 0, offset) + 1,
                     "total_lines": len(content.splitlines()),
-                    "excerpt": len(excerpt) < len(content),
+                    "excerpt": offset > 0 or len(excerpt) < len(content),
                 }
             )
         return {

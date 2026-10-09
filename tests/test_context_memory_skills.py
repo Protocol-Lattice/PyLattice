@@ -289,3 +289,29 @@ def test_short_continuations_preserve_the_topic_used_for_skill_selection(setting
     assert skills.task_goal == "Investigate parser"
     skills.begin_task("Optimize parser")
     assert "debug-tests" in skills.active
+
+def test_context_compaction_preserves_json_tool_reply_shapes(settings):
+    manager = ContextManager(replace(settings, context_chars=1100))
+    tool_reply = {
+        "ok": True,
+        "output": {"path": "large.py", "content": "source\n" * 700,
+                   "total_lines": 700, "has_more": False},
+        "error": None,
+        "truncated": False,
+    }
+    exchange = [
+        {"role": "assistant", "tool_calls": [{
+            "id": "read_1", "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path":"large.py"}'},
+        }]},
+        {"role": "tool", "tool_call_id": "read_1", "content": json.dumps(tool_reply)},
+    ]
+    result = manager.build("Rules", "Inspect large.py", [exchange])
+    reply = json.loads(result[-1]["content"])
+    assert set(reply) == {"ok", "output", "error", "truncated"}
+    assert reply["ok"] and reply["truncated"]
+    assert isinstance(reply["output"], dict)
+    assert set(reply["output"]) == set(tool_reply["output"])
+    assert reply["output"]["content"] != tool_reply["output"]["content"]
+    assert reply["output"]["path"] == "large.py"
+    assert result[-2]["tool_calls"][0]["id"] == result[-1]["tool_call_id"]

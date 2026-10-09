@@ -358,6 +358,9 @@ class ToolRegistry:
                 self._search_index_bytes -= cached.memory_bytes
                 del self._search_index[key]
         content = self._read_text(path)
+        updated = path.stat()
+        if updated.st_size != size or updated.st_mtime_ns != mtime_ns:
+            raise ToolError("File changed while indexing; collect again", code="file_changed")
         prefix = content[:100_000].casefold()
         memory_bytes = len(prefix.encode("utf-8"))
         if memory_bytes <= self.MAX_SEARCH_INDEX_BYTES:
@@ -804,7 +807,13 @@ class ToolRegistry:
                 return self.sanitize(result, name)
             if name == "run_command":
                 output = await self._run_command(**arguments)
-            elif name in {"list_files", "read_file", "search_files", "context_collect"}:
+            elif name in {
+                "list_files",
+                "read_file",
+                "search_files",
+                "context_collect",
+                "apply_patchset",
+            }:
                 output = await asyncio.to_thread(self._execute_file_tool, name, arguments)
             else:
                 output = self._execute_file_tool(name, arguments)

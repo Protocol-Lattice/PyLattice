@@ -142,7 +142,8 @@ class _Accumulator:
             if call_id is not None:
                 if not isinstance(call_id, str):
                     raise _ResponseShapeError("Invalid tool-call ID in response")
-                call["id"] = call_id
+                if call_id:
+                    call["id"] = call_id
             function = fragment.get("function") or {}
             if not isinstance(function, dict):
                 raise _ResponseShapeError("Executor tool function must be an object")

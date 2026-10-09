@@ -213,6 +213,20 @@ Open `http://127.0.0.1:4173`. From `website/`, `npm start` runs the same preview
 and `npm run check` checks the JavaScript syntax. Any static host can serve the
 contents of `website/dist/`.
 
+For Vercel, deploy the static files directly. The included `vercel.json` files
+select the **Other** framework preset, skip installation and building, and set
+the output directory for either project root:
+
+| Vercel Root Directory | Output Directory |
+| --- | --- |
+| Repository root (default) | `website/dist` |
+| `website` | `dist` |
+
+Do not use `npm start` or `npm run start` as the Vercel Build Command: it launches
+a local preview server and keeps running. The configuration overrides that build
+command on the next deployment. Commit and push the configuration, then redeploy.
+See Vercel's [static-site build settings](https://vercel.com/docs/builds/configure-a-build#skip-build-step).
+
 The interactive terminal uses simulated local examples; it does not execute
 agent tools or contact a model. Setup tabs provide normal and offline-demo
 commands. The site uses system font fallbacks when Google Fonts is unavailable.

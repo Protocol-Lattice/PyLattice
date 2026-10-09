@@ -689,7 +689,7 @@ class ToolRegistry:
         """Preflight all files before writing and stage replacements on the same volume."""
         prepared = self._patchset_preflight(args)
         pending: list[tuple[Path, str, str, str, bool]] = []
-        applied: list[tuple[Path, str, str]] = []
+        applied: list[tuple[Path, str, str, bool]] = []
         try:
             for (path, old, new), change in zip(prepared, args["changes"]):
                 # Approval may have taken time; re-check source before staging.
@@ -708,22 +708,29 @@ class ToolRegistry:
                 os.chmod(staged, mode)
                 pending.append((path, old, new, staged, creating))
             for path, old, new, staged, creating in pending:
+                # Reapply workspace path rules before committing staged data.
+                if self.resolve(str(path.relative_to(self.root))) != path:
+                    raise ToolError("Workspace path changed during patchset", code="file_changed")
                 # Reject concurrent creates as well as concurrent edits.
                 if creating and path.exists():
                     raise ToolError("File appeared during patchset", code="file_changed")
                 if not creating and (not path.exists() or self._read_text(path) != old):
                     raise ToolError("File changed during patchset", code="file_changed")
-                os.replace(staged, path)
-                applied.append((path, old, new))
-            for path, _, new in applied:
+                if creating:
+                    # An exclusive hard link cannot clobber a concurrent new file.
+                    os.link(staged, path)
+                else:
+                    os.replace(staged, path)
+                applied.append((path, old, new, creating))
+            for path, _, new, _ in applied:
                 if self.context is not None and hasattr(self.context, "cache_file"):
                     self.context.cache_file(str(path.relative_to(self.root)), new)
         except Exception:
             # A commit can fail mid-way (e.g. disk full). Restore best-effort, but never
             # roll back a path another process already changed after our replacement.
-            for path, old, new in reversed(applied):
+            for path, old, new, creating in reversed(applied):
                 if path.exists() and self._read_text(path) == new:
-                    if old:
+                    if not creating:
                         with tempfile.NamedTemporaryFile(
                             mode="w", encoding="utf-8", dir=path.parent, delete=False
                         ) as tmp:

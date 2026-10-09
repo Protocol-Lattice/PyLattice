@@ -25,6 +25,8 @@ jobs:
             src/agent_tui/context.py src/agent_tui/defaults.py src/agent_tui/loop.py \
             src/agent_tui/policy.py src/agent_tui/prompts.py src/agent_tui/tools.py \
             tests/test_agent.py tests/test_codemode.py tests/test_repository_context.py \
-            tests/test_tools.py
+            tests/test_tools.py benchmarks/benchmark_repository_context.py
       - name: Run regression suite
         run: python -m pytest -q
+      - name: Benchmark cold vs indexed repository scans
+        run: python benchmarks/benchmark_repository_context.py

@@ -22,8 +22,8 @@ from .tools import (
     object_schema,
 )
 
-MAX_CODE_CHARS = 24_000
-MAX_TOOL_CALLS = 32
+MAX_CODE_CHARS = 96_000
+MAX_TOOL_CALLS = 1024
 EXECUTION_SECONDS = 5.0
 MEMORY_BYTES = 64 * 1024 * 1024
 

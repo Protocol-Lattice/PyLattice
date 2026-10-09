@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
-from .codemode import CODE_SPEC, adapt_tool_calls, code_mode_prompt, execute_code
+from pydantic_monty import AsyncMonty
+
+from .codemode import CODE_SPEC, EXECUTION_SECONDS, adapt_tool_calls, code_mode_prompt, execute_code
 from .context import ContextManager
 from .extension_tools import register_extensions
 from .extensions import ExtensionConfig
@@ -39,9 +42,26 @@ class DefaultCodeRuntime:
 
     def __init__(self, responses: Any) -> None:
         self.responses = responses
+        self._pool: AsyncMonty | None = None
+        self._pool_lock = asyncio.Lock()
 
     async def execute(self, code, settings, run_tool):
-        return await execute_code(code, settings, run_tool, format_result=self.responses.as_dict)
+        # Reuse Monty workers across independent programs, without sharing variables.
+        # Checkout creates a fresh isolated session for every execute_code call.
+        async with self._pool_lock:
+            if self._pool is None:
+                pool = AsyncMonty(max_processes=1, request_timeout=EXECUTION_SECONDS + 2)
+                await pool.__aenter__()
+                self._pool = pool
+            return await execute_code(
+                code, settings, run_tool, format_result=self.responses.as_dict, pool=self._pool
+            )
+
+    async def aclose(self) -> None:
+        async with self._pool_lock:
+            pool, self._pool = self._pool, None
+            if pool is not None:
+                await pool.__aexit__(None, None, None)
 
 
 class DefaultToolBindings:

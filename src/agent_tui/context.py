@@ -35,7 +35,8 @@ def _compact_tool_reply(content: str, limit: int) -> str:
 
     def shrink(value: Any, keep: int) -> Any:
         if isinstance(value, str):
-            return value[:keep]
+            # Preserve short identifiers (paths, hashes, error codes) unmodified.
+            return value if len(value) <= 128 else value[:keep]
         if isinstance(value, list):
             return [shrink(item, keep) for item in value[: keep // 128]]
         if isinstance(value, dict):
@@ -62,8 +63,13 @@ def _compact_tool_reply(content: str, limit: int) -> str:
 
     # If metadata alone exceeds the allowance, retain the protocol envelope and
     # an explicit omission flag rather than returning a sliced JSON document.
+    error = (
+        {"code": "context_truncated", "message": "Earlier tool error omitted",
+         "retry_hint": None}
+        if not reply["ok"] else None
+    )
     return json.dumps(
-        {"ok": reply["ok"], "output": None, "error": None, "truncated": True},
+        {"ok": reply["ok"], "output": None, "error": error, "truncated": True},
         ensure_ascii=False,
     )
 

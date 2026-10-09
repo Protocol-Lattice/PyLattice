@@ -467,10 +467,208 @@ class ToolRegistry:
             raise ToolError("New content exceeds the 1 MB text-file limit")
         return path, old, new
 
+    def _collect_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        """One bounded filesystem scan, one policy-checked tool result.
+
+        The full selected source is retained by ContextManager, whereas the bridge
+        response contains only a small excerpt per file. No model/API calls occur.
+        """
+        query = args.get("query", "").strip()
+        terms = keywords(query)
+        max_files = args.get("max_files", 8)
+        max_chars = min(args.get("max_chars", 10000), max(500, self.settings.max_output_chars - 2500))
+        root = self.resolve(args.get("path", "."))
+        requested = args.get("paths") or []
+        ranked: list[tuple[int, str, str]] = []
+        skipped = 0
+        scanned_bytes = 0
+        scan_limit_reached = False
+
+        if requested:
+            candidates = [self.resolve(value) for value in requested]
+            if any(not item.is_file() for item in candidates):
+                raise ToolError("context_collect paths must be existing regular files")
+        else:
+            candidates = self._files(root)
+
+        for item in candidates:
+            try:
+                size = item.stat().st_size
+                if size > MAX_FILE_BYTES:
+                    skipped += 1
+                    continue
+                if not requested and scanned_bytes + size > 20_000_000:
+                    scan_limit_reached = True
+                    break
+                scanned_bytes += size
+                content = self._read_text(item)
+            except (OSError, UnicodeError, ToolError):
+                skipped += 1
+                continue
+            relative = str(item.relative_to(self.root))
+            if requested:
+                score = len(requested) - requested.index(relative) if relative in requested else 1
+            else:
+                path_hits = len(terms & keywords(relative))
+                body = content[:100_000].casefold()
+                body_hits = sum(1 for term in terms if term in body)
+                score = 6 * path_hits + body_hits
+                if terms and score == 0:
+                    continue
+                if not terms:
+                    score = 3 if item.name in {"README.md", "pyproject.toml", "go.mod"} else (
+                        1 if item.suffix in {".py", ".go", ".ts", ".js", ".rs"} else 0
+                    )
+            ranked.append((score, relative, content))
+        if not requested:
+            ranked.sort(key=lambda entry: (-entry[0], entry[1]))
+        chosen = ranked[:max_files]
+        # Leave headroom for JSON keys, file paths and digests under output sanitization.
+        remaining = max_chars
+        files: list[dict[str, Any]] = []
+        for position, (_, path, content) in enumerate(chosen):
+            slots = len(chosen) - position
+            allowance = max(0, (remaining // slots) - 180)
+            excerpt = content[:allowance]
+            remaining -= len(excerpt) + 180
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if self.context is not None and hasattr(self.context, "cache_file"):
+                digest = self.context.cache_file(path, content)
+            files.append(
+                {
+                    "path": path,
+                    "sha256": digest,
+                    "content": excerpt,
+                    "total_lines": len(content.splitlines()),
+                    "excerpt": len(excerpt) < len(content),
+                }
+            )
+        return {
+            "files": files,
+            "scanned_bytes": scanned_bytes,
+            "skipped": skipped,
+            "truncated": scan_limit_reached or len(ranked) > max_files or
+            any(item["excerpt"] for item in files),
+        }
+
+    def _patchset_preflight(self, args: dict[str, Any]) -> list[tuple[Path, str, str]]:
+        prepared: list[tuple[Path, str, str]] = []
+        seen: set[Path] = set()
+        for item in args["changes"]:
+            path = self.resolve(item["path"])
+            if path in seen:
+                raise ToolError("Each path may appear only once per patchset")
+            seen.add(path)
+            relative = str(path.relative_to(self.root))
+            action = item["action"]
+            if action == "create":
+                if set(item) != {"action", "path", "content"}:
+                    raise ToolError("Create needs action, path and content only")
+                if path.exists():
+                    raise ToolError(f"File already exists: {relative}", code="file_exists")
+                old, new = "", item["content"]
+            else:
+                if not {"old_text", "new_text"}.issubset(item) or "content" in item:
+                    raise ToolError("Edit requires old_text and new_text, not content")
+                old = self._read_text(path)
+                digest = hashlib.sha256(old.encode("utf-8")).hexdigest()
+                if "expected_sha256" in item and item["expected_sha256"] != digest:
+                    raise ToolError(f"File changed since context collection: {relative}", code="file_changed")
+                if self.context is not None and hasattr(self.context, "cached_file"):
+                    cached = self.context.cached_file(relative)
+                    if cached is None or cached.sha256 != digest:
+                        raise ToolError(
+                            f"Stale or missing context for {relative}; call context_collect first",
+                            code="stale_context",
+                        )
+                if old.count(item["old_text"]) != 1:
+                    raise ToolError(f"old_text must match exactly once in {relative}")
+                new = old.replace(item["old_text"], item["new_text"], 1)
+            if len(new.encode("utf-8")) > MAX_FILE_BYTES:
+                raise ToolError(f"New file exceeds the 1 MB limit: {relative}")
+            prepared.append((path, old, new))
+        return prepared
+
+    def _apply_patchset(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Preflight all files before writing and stage replacements on the same volume."""
+        prepared = self._patchset_preflight(args)
+        pending: list[tuple[Path, str, str, str]] = []
+        applied: list[tuple[Path, str, str]] = []
+        try:
+            for path, old, new in prepared:
+                # Approval may have taken time; re-check source before staging.
+                if path.exists():
+                    if self._read_text(path) != old:
+                        raise ToolError("File changed since preflight", code="file_changed")
+                elif old:
+                    raise ToolError("File was removed since preflight", code="file_changed")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=path.parent, delete=False
+                ) as tmp:
+                    tmp.write(new)
+                    staged = tmp.name
+                os.chmod(staged, mode)
+                pending.append((path, old, new, staged))
+            for path, old, new, staged in pending:
+                # Reject concurrent edits rather than silently clobbering new content.
+                if path.exists() and self._read_text(path) != old:
+                    raise ToolError("File changed during patchset", code="file_changed")
+                if not path.exists() and old:
+                    raise ToolError("File disappeared during patchset", code="file_changed")
+                os.replace(staged, path)
+                applied.append((path, old, new))
+            for path, _, new in applied:
+                if self.context is not None and hasattr(self.context, "cache_file"):
+                    self.context.cache_file(str(path.relative_to(self.root)), new)
+        except Exception:
+            # A commit can fail mid-way (e.g. disk full). Restore best-effort, but never
+            # roll back a path another process already changed after our replacement.
+            for path, old, new in reversed(applied):
+                if path.exists() and self._read_text(path) == new:
+                    if old:
+                        with tempfile.NamedTemporaryFile(
+                            mode="w", encoding="utf-8", dir=path.parent, delete=False
+                        ) as tmp:
+                            tmp.write(old)
+                            rollback = tmp.name
+                        os.replace(rollback, path)
+                    else:
+                        path.unlink()
+                if self.context is not None and hasattr(self.context, "invalidate_file"):
+                    self.context.invalidate_file(str(path.relative_to(self.root)))
+            raise
+        finally:
+            for _, _, _, staged in pending:
+                if os.path.exists(staged):
+                    os.unlink(staged)
+        return {
+            "changes": [
+                {"path": str(path.relative_to(self.root)), "bytes": len(new.encode("utf-8"))}
+                for path, _, new in prepared
+            ],
+            "count": len(prepared),
+        }
+
     def preview(self, name: str, arguments: dict[str, Any]) -> str:
         if name in self.handlers:
             # A replacement may use a different schema and implementation from the built-in.
             return json.dumps(arguments, ensure_ascii=False, indent=2)
+        if name == "apply_patchset":
+            previews = []
+            for path, old, new in self._patchset_preflight(arguments):
+                relative = str(path.relative_to(self.root))
+                diff = "".join(
+                    difflib.unified_diff(
+                        old.splitlines(keepends=True),
+                        new.splitlines(keepends=True),
+                        fromfile=f"a/{relative}",
+                        tofile=f"b/{relative}",
+                    )
+                )
+                previews.append(diff or f"{relative}: no change")
+            return "\\n".join(previews)
         if name in {"write_file", "edit_file"}:
             path, old, new = self._replacement(name, arguments)
             relative = str(path.relative_to(self.root))

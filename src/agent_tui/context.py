@@ -14,6 +14,66 @@ from .openrouter import ExecutorError
 from .relevance import keywords
 
 
+def _compact_tool_reply(content: str, limit: int) -> str:
+    """Bound a previous tool result without ever cutting the JSON response envelope.
+
+    Context pruning must not turn valid tool messages into malformed JSON. Preserve
+    the output's object/list/string shape when possible, and mark any loss of data.
+    """
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        parsed = content
+    if not isinstance(parsed, dict) or not {"ok", "output", "error", "truncated"} <= parsed.keys():
+        parsed = {"ok": True, "output": parsed, "error": None, "truncated": False}
+    reply = {
+        "ok": parsed["ok"],
+        "output": parsed["output"],
+        "error": parsed["error"],
+        "truncated": True,
+    }
+
+    def shrink(value: Any, keep: int) -> Any:
+        if isinstance(value, str):
+            # Preserve short identifiers (paths, hashes, error codes) unmodified.
+            return value if len(value) <= 128 else value[:keep]
+        if isinstance(value, list):
+            return [shrink(item, keep) for item in value[: keep // 128]]
+        if isinstance(value, dict):
+            return {key: shrink(item, keep) for key, item in value.items()}
+        return value
+
+    best = ""
+    low, high = 0, len(content)
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = {**reply, "output": shrink(reply["output"], middle)}
+        if candidate["error"] is not None:
+            candidate["error"] = shrink(reply["error"], min(middle, 200))
+        if isinstance(candidate["output"], dict) and "truncated" in candidate["output"]:
+            candidate["output"]["truncated"] = True
+        serialized = json.dumps(candidate, ensure_ascii=False, allow_nan=False)
+        if len(serialized) <= limit:
+            best = serialized
+            low = middle + 1
+        else:
+            high = middle - 1
+    if best:
+        return best
+
+    # If metadata alone exceeds the allowance, retain the protocol envelope and
+    # an explicit omission flag rather than returning a sliced JSON document.
+    error = (
+        {"code": "context_truncated", "message": "Earlier tool error omitted",
+         "retry_hint": None}
+        if not reply["ok"] else None
+    )
+    return json.dumps(
+        {"ok": reply["ok"], "output": None, "error": error, "truncated": True},
+        ensure_ascii=False,
+    )
+
+
 def _turn_text(turn: list[dict[str, Any]]) -> tuple[str, str]:
     task = next((str(m.get("content") or "") for m in turn if m.get("role") == "user"), "")
     outcome = next(
@@ -325,8 +385,8 @@ class ContextManager:
                         "increase --context-chars, unload a skill, or start a smaller task"
                     )
                 message = max(candidates, key=lambda m: len(m["content"]))
-                message["content"] = message["content"][: len(message["content"]) // 2] + (
-                    "\n[Tool result excerpt; re-read for full output]"
+                message["content"] = _compact_tool_reply(
+                    message["content"], max(160, len(message["content"]) // 2)
                 )
                 recent[-1] = sized([latest])[0]
                 stats.chars += recent[-1][1] - previous_size

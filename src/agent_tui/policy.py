@@ -43,9 +43,11 @@ class DefaultToolPolicy:
             hook = await agent.middleware.dispatch(
                 "before_tool", {"tool": call.name, "arguments": arguments, "step": step}
             )
-            arguments = agent.registry.validate(call.name, json.dumps(hook["arguments"]))
+            arguments = agent.registry.validate(call.name, hook["arguments"])
             if exchange is not None:
-                exchange[0]["tool_calls"][0]["function"]["arguments"] = json.dumps(arguments)
+                exchange[0]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+                    arguments, ensure_ascii=False, allow_nan=False
+                )
             fingerprint = call.name + json.dumps(arguments, sort_keys=True)
             run_tools.repeats[fingerprint] += 1
             if run_tools.repeats[fingerprint] > 2:

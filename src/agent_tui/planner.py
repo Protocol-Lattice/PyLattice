@@ -85,9 +85,10 @@ def parse_plan(completion: Completion, tools: Sequence[ToolDescriptor], max_dept
     if len(completion.calls) != 1 or completion.calls[0].name != "submit_plan":
         raise PlanningError("Planner must return one submit_plan call")
     try:
-        raw = json.loads(completion.calls[0].arguments)
+        arguments = completion.calls[0].arguments
+        raw = json.loads(arguments) if isinstance(arguments, str) else arguments
         Draft202012Validator(plan_schema(tools, max_depth)).validate(raw)
-    except (ValueError, ValidationError) as exc:
+    except (TypeError, ValueError, ValidationError) as exc:
         raise PlanningError(f"Invalid planner output: {str(exc)[:200]}") from None
     paths = tuple(tuple(PredictedAction(**action) for action in path) for path in raw["paths"])
     roots = [path[0].tool for path in paths]

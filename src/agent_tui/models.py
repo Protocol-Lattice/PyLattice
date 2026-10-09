@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,13 +10,20 @@ from typing import Any
 class ToolCall:
     id: str
     name: str
-    arguments: str
+    arguments: str | dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
+        # OpenAI-compatible chat transcripts require a JSON *string* here, even
+        # when a custom executor provides already-decoded argument objects.
+        arguments = (
+            self.arguments
+            if isinstance(self.arguments, str)
+            else json.dumps(self.arguments, ensure_ascii=False, allow_nan=False)
+        )
         return {
             "id": self.id,
             "type": "function",
-            "function": {"name": self.name, "arguments": self.arguments},
+            "function": {"name": self.name, "arguments": arguments},
         }
 
 

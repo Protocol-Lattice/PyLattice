@@ -392,3 +392,37 @@ async def test_replacement_respects_readonly_and_invalid_schema_is_atomic(readon
     tools.replace(replace(old, risk=RiskLevel.HIGH), handler)
     assert "read_file" not in tools.specs
     assert not (await tools.execute("read_file", {"path": "x"})).ok
+
+def test_argument_shapes_are_normalized_and_patchset_actions_validated(settings):
+    registry = ToolRegistry(settings)
+    payload = {"path": "README.md"}
+    assert registry.validate("read_file", payload) == payload
+    assert registry.validate("read_file", json.dumps(json.dumps(payload))) == payload
+    with pytest.raises(ToolError, match="Invalid arguments"):
+        registry.validate("read_file", '{"path":"README.md","start_line":NaN}')
+    with pytest.raises(ToolError, match="Invalid arguments"):
+        registry.validate("apply_patchset", {"changes": [{"action": "edit", "path": "x.py"}]})
+    with pytest.raises(ToolError, match="Invalid arguments"):
+        registry.validate("apply_patchset", {
+            "changes": [{"action": "create", "path": "x.py", "content": "x",
+                         "old_text": "x"}],
+        })
+    assert registry.validate("apply_patchset", {
+        "changes": [{"action": "create", "path": "x.py", "content": "x"}],
+    })["changes"][0]["action"] == "create"
+
+
+async def test_invalid_custom_tool_result_yields_structured_error(settings):
+    registry = ToolRegistry(settings)
+
+    async def wrong_shape(arguments):
+        return {"ok": True, "content": arguments["value"]}
+
+    registry.register(
+        ToolSpec("custom", "Invalid handler", object_schema({"value": {"type": "string"}})),
+        wrong_shape,
+    )
+    response = await registry.execute("custom", {"value": "ok"})
+    assert not response.ok
+    assert response.as_dict()["error"]["code"] == "invalid_tool_response"
+    assert response.as_dict()["output"] is None

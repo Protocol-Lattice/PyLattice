@@ -11,6 +11,8 @@ import os
 import signal
 import stat
 import tempfile
+import threading
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -306,7 +308,19 @@ class ToolResult:
         }
 
 
+@dataclass(frozen=True)
+class _IndexedSource:
+    """Metadata-keyed search excerpt; large source bodies remain on disk."""
+
+    size: int
+    mtime_ns: int
+    folded_prefix: str
+    memory_bytes: int
+
+
 class ToolRegistry:
+    MAX_SEARCH_INDEX_BYTES = 8 * 1024 * 1024
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.root = settings.workspace
@@ -317,6 +331,45 @@ class ToolRegistry:
         }
         self.handlers: dict[str, Callable[[dict[str, Any]], Awaitable[ToolResult]]] = {}
         self.context = None
+        self._search_index: OrderedDict[str, _IndexedSource] = OrderedDict()
+        self._search_index_bytes = 0
+        self._index_lock = threading.RLock()
+
+    def clear_index(self) -> None:
+        with self._index_lock:
+            self._search_index.clear()
+            self._search_index_bytes = 0
+
+    def _indexed_text(
+        self, path: Path, *, size: int, mtime_ns: int
+    ) -> tuple[str, str | None, bool]:
+        """Only read unchanged files once across repeated repository searches.
+
+        A hit is validated using the same filesystem metadata used by the source
+        context cache. Return full source on misses so selected files need no reread.
+        """
+        key = str(path.relative_to(self.root))
+        with self._index_lock:
+            cached = self._search_index.get(key)
+            if cached and cached.size == size and cached.mtime_ns == mtime_ns:
+                self._search_index.move_to_end(key)
+                return cached.folded_prefix, None, True
+            if cached:
+                self._search_index_bytes -= cached.memory_bytes
+                del self._search_index[key]
+        content = self._read_text(path)
+        prefix = content[:100_000].casefold()
+        memory_bytes = len(prefix.encode("utf-8"))
+        if memory_bytes <= self.MAX_SEARCH_INDEX_BYTES:
+            with self._index_lock:
+                self._search_index[key] = _IndexedSource(
+                    size, mtime_ns, prefix, memory_bytes
+                )
+                self._search_index_bytes += memory_bytes
+                while self._search_index_bytes > self.MAX_SEARCH_INDEX_BYTES:
+                    _, evicted = self._search_index.popitem(last=False)
+                    self._search_index_bytes -= evicted.memory_bytes
+        return prefix, content, False
 
     def bind_context(self, manager: Any) -> None:
         """Attach the current agent's workspace cache without sharing it across agents."""

@@ -387,3 +387,39 @@ async def test_interruption_after_visible_text_is_not_retried(settings):
         with pytest.raises(ExecutorError, match="No tool from the incomplete response"):
             await OpenRouterExecutor(settings, client).complete([], [], None, ignore_token)
     assert len(requests) == 1
+
+async def test_nonstreaming_provider_normalizes_object_tool_arguments(settings):
+    payload = {
+        "model": "free/tool-model",
+        "choices": [{
+            "message": {
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": {"path": "README.md"}},
+                }]
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }
+    response = httpx.Response(200, json=payload)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response)) as client:
+        result = await OpenRouterExecutor(settings, client).complete(
+            [], ToolRegistry(settings).schemas("read_file"), "read_file", ignore_token
+        )
+    assert result.calls[0].arguments == '{"path": "README.md"}'
+    assert result.calls[0].id == "call_1"
+
+
+async def test_legacy_function_call_is_normalized_with_a_transcript_id(settings):
+    response = httpx.Response(200, json={"choices": [{
+        "message": {"function_call": {"name": "finish", "arguments": '{"summary":"Done"}'}},
+        "finish_reason": "function_call",
+    }]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response)) as client:
+        result = await OpenRouterExecutor(settings, client).complete(
+            [], ToolRegistry(settings).schemas("finish"), "finish", ignore_token
+        )
+    assert result.calls[0].name == "finish"
+    assert result.calls[0].id == "legacy_call_0"
+    assert json.loads(result.calls[0].arguments) == {"summary": "Done"}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import hashlib
 import json
 import os
 import signal
@@ -20,6 +21,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from .config import Settings
+from .relevance import keywords
 
 SKIP_DIRS = {
     ".git",
@@ -152,6 +154,53 @@ SPECS = [
         ),
     ),
     ToolSpec(
+        "context_collect",
+        "Find and read the most relevant workspace files in one batch; cache their exact "
+        "source in Context Manager for later Code Mode steps and repository refactors. "
+        "Accept a query, explicit paths, or both. Each result includes a source SHA-256. "
+        "Safe read-only operation; repeat only when the source changes.",
+        object_schema(
+            {
+                "query": {"type": "string"},
+                "paths": {
+                    "type": "array", "maxItems": 24,
+                    "items": PATH, "uniqueItems": True,
+                },
+                "path": PATH,
+                "max_files": {"type": "integer", "minimum": 1, "maximum": 24},
+                "max_chars": {"type": "integer", "minimum": 500, "maximum": 14000},
+            }
+        ),
+    ),
+    ToolSpec(
+        "apply_patchset",
+        "Refactor several previously inspected files and/or create new files in one "
+        "preflight-validated change set and one approval. For edits, use an exact unique "
+        "old_text and optional expected_sha256 from context_collect. Create actions "
+        "never overwrite existing files. Always inspect and verify affected files.",
+        object_schema(
+            {
+                "changes": {
+                    "type": "array", "minItems": 1, "maxItems": 24,
+                    "items": object_schema(
+                        {
+                            "action": {"enum": ["edit", "create"]},
+                            "path": PATH,
+                            "old_text": {"type": "string", "minLength": 1},
+                            "new_text": {"type": "string"},
+                            "content": {"type": "string"},
+                            "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        },
+                        ["action", "path"],
+                    ),
+                },
+            },
+            ["changes"],
+        ),
+        "edit",
+        RiskLevel.MEDIUM,
+    ),
+    ToolSpec(
         "write_file",
         "Create a UTF-8 file, or replace one in full only when the task explicitly requests it. "
         "Use small edit_file patches for refactoring and other changes to existing files. "
@@ -267,6 +316,11 @@ class ToolRegistry:
             if not settings.read_only or spec.risk == RiskLevel.LOW
         }
         self.handlers: dict[str, Callable[[dict[str, Any]], Awaitable[ToolResult]]] = {}
+        self.context = None
+
+    def bind_context(self, manager: Any) -> None:
+        """Attach the current agent's workspace cache without sharing it across agents."""
+        self.context = manager
 
     def register(
         self, spec: ToolSpec, handler: Callable[[dict[str, Any]], Awaitable[ToolResult]]

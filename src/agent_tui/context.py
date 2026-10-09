@@ -279,8 +279,8 @@ class ContextManager:
             if workspace_context else []
         )
         refs = sized(
-            ([source_references] if source_references else [])
-            + [[{"role": "system", "content": ref}] for ref in references or []]
+            [[{"role": "system", "content": ref}] for ref in references or []]
+            + ([source_references] if source_references else [])
         )
         system_message = {"role": "system", "content": system}
         goal_message = {"role": "user", "content": goal}

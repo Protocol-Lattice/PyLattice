@@ -205,3 +205,105 @@ async def test_context_collect_extracts_matching_window_inside_large_source(sett
     assert item["start_line"] > 1
     assert "def needle()" in item["content"]
     assert "def needle()" in context.workspace_context("needle")
+
+
+async def test_repeated_search_uses_index_and_rereads_changed_files(settings, tmp_path):
+    alpha = tmp_path / "alpha.py"
+    beta = tmp_path / "beta.py"
+    alpha.write_text("def needle_alpha():\n    return 1\n")
+    beta.write_text("def needle_beta():\n    return 2\n")
+    registry, _ = bound_registry(settings)
+
+    first = await registry.execute("context_collect", {"query": "needle", "max_files": 2})
+    assert first.ok
+    first_data = json.loads(first.content)
+    assert first_data["disk_reads"] == 2
+    assert first_data["index_hits"] == 0
+
+    second = await registry.execute("context_collect", {"query": "needle", "max_files": 2})
+    assert second.ok
+    second_data = json.loads(second.content)
+    assert second_data["disk_reads"] == 0
+    assert second_data["index_hits"] == 2
+    assert [f["path"] for f in second_data["files"]] == ["alpha.py", "beta.py"]
+
+    # The stale metadata entry must be replaced; this new content lacks the query term.
+    alpha.write_text("def unrelated_alpha():\n    return 11111\n")
+    third = await registry.execute("context_collect", {"query": "needle", "max_files": 2})
+    assert third.ok
+    third_data = json.loads(third.content)
+    assert third_data["disk_reads"] == 1
+    assert third_data["index_hits"] == 1
+    assert [f["path"] for f in third_data["files"]] == ["beta.py"]
+
+
+async def test_no_query_reads_only_selected_files(settings, tmp_path):
+    for i in range(20):
+        (tmp_path / f"module{i:02d}.py").write_text(f"VALUE = {i}\n")
+    registry, _ = bound_registry(settings)
+    found = await registry.execute("context_collect", {"max_files": 3})
+    assert found.ok
+    data = json.loads(found.content)
+    assert data["disk_reads"] == 3
+    assert len(data["files"]) == 3
+
+
+async def test_context_redacts_model_credentials_before_prompt_injection(settings, tmp_path):
+    (tmp_path / "api.py").write_text(f"SECRET = '{settings.api_key}'\n")
+    registry, context = bound_registry(settings)
+    result = await registry.execute("context_collect", {"paths": ["api.py"]})
+    assert result.ok
+    assert settings.api_key not in result.content
+    excerpt = context.workspace_context("api")
+    assert settings.api_key not in excerpt
+    assert "[REDACTED]" in excerpt
+
+
+async def test_concurrent_create_cannot_clobber_unrelated_work(settings, tmp_path, monkeypatch):
+    source = tmp_path / "source.py"
+    source.write_text("VALUE = 1\n")
+    target = tmp_path / "new.py"
+    registry, context = bound_registry(settings)
+    await registry.execute("context_collect", {"paths": ["source.py"]})
+
+    real_link = os.link
+
+    def racing_link(src, dst, *args, **kwargs):
+        if str(dst) == str(target):
+            target.write_text("racer owns this file\n")
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", racing_link)
+    result = await registry.execute(
+        "apply_patchset",
+        {
+            "changes": [
+                {
+                    "action": "edit", "path": "source.py",
+                    "old_text": "VALUE = 1", "new_text": "VALUE = 2",
+                },
+                {"action": "create", "path": "new.py", "content": "new file"},
+            ],
+        },
+    )
+    assert not result.ok
+    assert source.read_text() == "VALUE = 1\n"
+    assert target.read_text() == "racer owns this file\n"
+    assert context.cached_file("source.py") is None
+
+
+def test_search_index_is_bounded_and_reset_on_clear(settings, tmp_path):
+    registry, context = bound_registry(settings)
+    for i in range(20):
+        (tmp_path / f"unit{i}.txt").write_text(
+            f"search_{i} marker\n" + "lots of searchable text\n" * 2000
+        )
+    result = registry._execute_file_tool(
+        "context_collect", {"query": "searchable", "max_files": 1}
+    )
+    assert result["index_hits"] == 0
+    assert registry._search_index_bytes <= registry.MAX_SEARCH_INDEX_BYTES
+    context.clear()
+    registry.clear_index()
+    assert not registry._search_index
+    assert registry._search_index_bytes == 0

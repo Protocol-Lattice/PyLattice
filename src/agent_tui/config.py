@@ -28,7 +28,7 @@ class Settings:
     extensions_path: Path | None = None
     mods_path: Path | None = None
     mod_overrides: tuple[str, ...] = ()
-    max_tokens: int = 4096
+    max_tokens: int = 16_384
     code_mode: bool = True
     planning: bool = True
     routing: str = "mcts"

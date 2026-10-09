@@ -115,6 +115,8 @@ class Agent:
         if self.running:
             raise RuntimeError("Stop the current run before clearing the conversation")
         self.context.clear()
+        if hasattr(self.registry, "clear_index"):
+            self.registry.clear_index()
         self.skills.clear()
 
     def _context(

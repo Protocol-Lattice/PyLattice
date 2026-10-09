@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import sqlite3
+import subprocess
 from datetime import datetime
+from pathlib import Path
 from time import monotonic
 
 from rich.text import Text
@@ -83,7 +86,7 @@ class AgentApp(App):
         Binding("ctrl+n", "new_chat", "New chat", show=False),
         Binding("ctrl+s", "save", "Save transcript", show=False),
         Binding("ctrl+l", "focus_prompt", "Focus prompt", show=False),
-        Binding("ctrl+o", "toggle_activity", "activity"),
+        Binding("ctrl+o", "toggle_activity", "activity", show=False),
     ]
 
     def __init__(
@@ -124,6 +127,8 @@ class AgentApp(App):
         self._stream_rendered = ""
         self._stream_updated = 0.0
         self._tool_cards: dict[tuple[int, int], tuple[Collapsible, Static, str]] = {}
+        self._active_code_card: tuple[int, int] | None = None
+        self._code_call_count = 0
         self._subagent_cards: dict[str, tuple[Collapsible, Static, str]] = {}
         self.transcript: list[tuple[str, str]] = []
 
@@ -134,7 +139,7 @@ class AgentApp(App):
                 yield Static(
                     f"pylattice / {self.settings.workspace.name}", id="window-title", markup=False
                 )
-                yield Static(f"{self.size.width} × {self.size.height}", id="window-size")
+                yield Button("×", id="close", tooltip="Quit (Ctrl+C)")
             with Horizontal(id="masthead"):
                 yield Static("⬡  PyLattice", id="brand")
                 mode = (
@@ -146,7 +151,14 @@ class AgentApp(App):
                 )
                 yield Static(mode, id="stack-label")
             with Horizontal(id="workspace-bar"):
-                yield Static(str(self.settings.workspace), id="workspace", markup=False)
+                yield Static("", id="branch", markup=False)
+                workspace = self.settings.workspace
+                path = (
+                    f"~/{workspace.relative_to(Path.home())}"
+                    if workspace.is_relative_to(Path.home())
+                    else str(workspace)
+                )
+                yield Static(path, id="workspace", markup=False)
                 policy = (
                     "read only"
                     if self.settings.read_only
@@ -154,14 +166,10 @@ class AgentApp(App):
                     if self.settings.auto_approve
                     else "approvals on"
                 )
-                yield Static(policy, id="policy")
+                yield Static(f"◇  {policy}", id="policy")
             with Horizontal(id="body"):
                 with Vertical(id="conversation-pane"), VerticalScroll(id="conversation"):
-                    yield MessageCard(
-                        "A fresh prompt. A place to begin.",
-                        "Tell me what you're building.  \nWe'll take it one step at a time.",
-                        flavor="welcome",
-                    )
+                    yield self._welcome()
                 with Vertical(id="sidebar"):
                     yield Static("EXECUTION", classes="section-title")
                     yield Static("● Idle", id="phase", markup=False)
@@ -198,19 +206,24 @@ class AgentApp(App):
                 with Horizontal(id="prompt-field"):
                     yield Static("›", id="prompt-prefix")
                     yield Input(
-                        placeholder="Tell me what you're building…",
+                        placeholder="Explore a project",
                         id="prompt",
                         tooltip="/help commands · Ctrl+N new chat · Ctrl+S save · Ctrl+C quit",
                     )
-                yield Button("Run  →", id="run", variant="primary")
+                yield Button("Run   →", id="run", variant="primary")
                 yield Button("Stop", id="stop", variant="error", disabled=True)
             with Horizontal(id="status-bar"):
-                yield Footer(show_command_palette=False)
+                with Horizontal(id="shortcuts"):
+                    yield Footer(show_command_palette=False)
+                    yield Button(
+                        "≡ activity", id="activity-toggle", tooltip="Toggle activity (Ctrl+O)"
+                    )
                 yield Static("Ready when you are", id="composer-label", markup=False)
                 yield Static("●", id="status-dot")
 
     async def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
+        self.run_worker(self._update_workspace_branch(), name="workspace-branch")
         self.set_interval(0.2, self._update_elapsed)
         if self.agent.requires_api_key and not self.settings.api_key:
             await self._message(
@@ -228,11 +241,37 @@ class AgentApp(App):
         for screen in self.screen_stack:
             screen.set_class(event.size.width < 100, "compact")
             screen.set_class(event.size.width < 60, "narrow")
-            screen.set_class(event.size.height < 32, "short")
-        self.query_one("#window-size", Static).update(f"{event.size.width} × {event.size.height}")
+            screen.set_class(event.size.height < 24, "short")
 
+    @on(Button.Pressed, "#activity-toggle")
     def action_toggle_activity(self) -> None:
         self.screen.toggle_class("show-activity")
+
+    @staticmethod
+    def _welcome() -> MessageCard:
+        return MessageCard(
+            "A fresh prompt. A place to begin.",
+            "Tell me what you're building.  \nWe'll take it one step at a time.",
+            flavor="welcome",
+        )
+
+    async def _update_workspace_branch(self) -> None:
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", str(self.settings.workspace), "symbolic-ref", "--short", "HEAD"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=1,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if result.returncode == 0 and (branch := result.stdout.strip()):
+            label = self.query_one("#branch", Static)
+            label.update(f"⎇ {branch}")
+            label.add_class("has-branch")
 
     @on(Input.Submitted, "#prompt")
     async def on_prompt(self, event: Input.Submitted) -> None:
@@ -286,6 +325,8 @@ class AgentApp(App):
         self._step = 0
         self._started = monotonic()
         self._tool_cards.clear()
+        self._active_code_card = None
+        self._code_call_count = 0
         self._subagent_cards.clear()
         self._stream_card = None
         self._stream_text = ""
@@ -430,8 +471,21 @@ class AgentApp(App):
             card = Collapsible(
                 body, title=event.text, collapsed=True, classes="tool-card"
             )
-            await self.query_one("#conversation", VerticalScroll).mount(card)
-            self._tool_cards[(event.step, event.data.get("call_id", 0))] = (card, body, arguments)
+            key = (event.step, event.data.get("call_id", 0))
+            parent = self._active_code_card
+            if parent and parent[0] == event.step and event.text not in {"execute_code", "finish"}:
+                program = self._tool_cards[parent][0]
+                await program.query_one(Collapsible.Contents).mount(card)
+                self._code_call_count += 1
+                count = self._code_call_count
+                program.title = f"execute_code  ·  {count} tool {'call' if count == 1 else 'calls'}"
+            else:
+                await self.query_one("#conversation", VerticalScroll).mount(card)
+            self._tool_cards[key] = (card, body, arguments)
+            if event.text == "execute_code":
+                self._active_code_card = key
+                self._code_call_count = 0
+            card.set_class(event.text == "finish", "finish")
             self._log(f"Calling {event.text}")
             self._scroll()
         elif event.kind == "approval":
@@ -445,9 +499,14 @@ class AgentApp(App):
                 marker = "✓" if event.data["ok"] else "×"
                 card.title = f"{marker} {card.title}  ·  {status}"
                 card.set_class(not event.data["ok"], "failed")
+                card.set_class(event.data["ok"], "completed")
                 body.update(f"ARGUMENTS\n{arguments}\n\nRESULT\n{event.text}")
                 if not event.data["ok"]:
                     card.collapsed = False
+                    if self._active_code_card:
+                        self._tool_cards[self._active_code_card][0].collapsed = False
+                if key == self._active_code_card:
+                    self._active_code_card = None
             elif not event.data["ok"]:
                 await self._message(f"TOOL ERROR / {event.data['tool']}", event.text, "notice")
             self.transcript.append((f"TOOL {event.data['tool']}", event.text))
@@ -682,8 +741,14 @@ class AgentApp(App):
             return
         self.agent.clear()
         self.transcript.clear()
+        self._tool_cards.clear()
+        self._active_code_card = None
+        self._code_call_count = 0
+        self._stream_card = None
+        self._stream_text = self._stream_rendered = ""
         self._subagent_cards.clear()
         await self.query_one("#conversation", VerticalScroll).remove_children()
+        await self.query_one("#conversation", VerticalScroll).mount(self._welcome())
         self.query_one("#activity", RichLog).clear()
         self.query_one("#phase", Static).update("● Idle")
         self.query_one("#next-tool", Static).update("Waiting for a task")
@@ -720,6 +785,7 @@ class AgentApp(App):
             self._closed = True
             await self.agent.aclose()
 
+    @on(Button.Pressed, "#close")
     async def action_quit(self) -> None:
         self.action_stop()
         if self._worker:

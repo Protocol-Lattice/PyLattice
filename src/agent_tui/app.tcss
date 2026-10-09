@@ -1,16 +1,15 @@
-/* The website's terminal preview, laid out in terminal cells. */
+/* The website's workspace design, laid out in terminal cells. */
 $rule: #d4acbd;
 
 Screen {
     align: center middle;
-    padding: 1 2;
+    padding: 0 1;
     background: $background;
     color: $foreground;
 }
 
 #terminal-shell {
     width: 1fr;
-    max-width: 150;
     height: 1fr;
     border: solid $foreground;
     background: $background;
@@ -27,11 +26,22 @@ Screen {
 
 #window-mark { width: 4; height: 1; }
 #window-title { width: 1fr; height: 1; }
-#window-size { width: 10; height: 1; text-align: right; color: $surface 70%; }
+#close {
+    width: 3;
+    min-width: 3;
+    height: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: $surface;
+    text-style: none;
+}
+
+#close:hover, #close:focus { background: $primary; text-style: bold; }
 
 #masthead {
-    height: 2;
-    padding: 1 3 0 3;
+    height: 3;
+    padding: 1 4;
 }
 
 #brand { width: 1fr; height: 1; color: $primary; text-style: bold; }
@@ -39,16 +49,18 @@ Screen {
 
 #workspace-bar {
     height: 2;
-    padding: 0 3;
+    padding: 0 4;
 }
 
+#branch { display: none; width: auto; max-width: 30; height: 1; margin-right: 2; color: $secondary; }
+#branch.has-branch { display: block; }
 #workspace { width: 1fr; height: 1; color: $secondary; }
 #policy { width: auto; height: 1; margin-left: 2; color: $primary; }
 #body { height: 1fr; min-height: 1; }
 #conversation-pane { width: 1fr; }
 
 #conversation {
-    padding: 0 3;
+    padding: 0 4;
     background: $background;
     scrollbar-size: 1 1;
     scrollbar-color: $boost;
@@ -61,25 +73,26 @@ Screen {
 .message {
     height: auto;
     margin: 0 0 1 0;
-    padding: 0 1;
+    padding: 0 2;
     background: transparent;
 }
 
 .message-role {
     height: 1;
+    margin-bottom: 1;
     color: $primary;
     text-style: bold;
 }
 
 .message-body { height: auto; margin: 0; padding: 0; color: $foreground; }
 .user { background: $panel; border-left: solid $primary; }
-.assistant { border: none; }
+.assistant { border: none; padding-left: 2; }
 .notice { border-left: solid $warning; }
 .notice .message-role { color: $warning; }
 
 .welcome {
     border: solid $rule;
-    padding: 1 2;
+    padding: 1 3;
 }
 
 .welcome .message-role {
@@ -107,8 +120,8 @@ MarkdownBlock > .code_inline { color: $primary; background: transparent; }
 /* Tool details sit behind a small, indented disclosure row. */
 .tool-card, .plan-card {
     height: auto;
-    margin: 0 0 1 1;
-    padding: 0 0 0 1;
+    margin: 0 0 1 2;
+    padding: 1 0 1 2;
     border: none;
     border-left: solid $rule;
     background: transparent;
@@ -134,7 +147,9 @@ CollapsibleTitle:hover, CollapsibleTitle:focus {
 .plan-card CollapsibleTitle { color: $primary; }
 .tool-card.failed { border-left: solid $error; }
 .tool-card.failed CollapsibleTitle { color: $error; }
+.tool-card.finish.completed { display: none; }
 .tool-card > Contents, .plan-card > Contents { padding: 0; }
+.tool-card .tool-card { margin: 1 0 0 0; padding: 0 0 0 1; }
 .tool-content { height: auto; padding: 1 1 0 1; color: $secondary; }
 
 /* Ctrl+O reveals the activity rail when there is room for it. */
@@ -170,12 +185,12 @@ Screen.show-activity #sidebar { display: block; }
 }
 
 /* The prompt and its action meet at a single edge. */
-#composer { height: 4; padding: 1 3 0 3; }
+#composer { height: 4; padding: 1 4 0 4; }
 #input-row { height: 3; }
 #prompt-field {
     width: 1fr;
     height: 3;
-    padding: 0 1;
+    padding: 0 2;
     border: solid $rule;
     border-right: none;
     background: $surface;
@@ -211,21 +226,23 @@ Button:hover { background: $boost; border: tall $boost; }
 Button:focus { border: tall $primary; text-style: bold reverse; }
 Button:disabled { color: $secondary; opacity: 50%; }
 #run {
-    width: 10;
+    width: 14;
     color: $surface;
     background: $primary;
     border: none;
+    text-style: none;
 }
 
 #run:hover, #run:focus { background: $accent; border: none; }
-#stop { width: 10; color: $surface; background: $error; border: none; }
+#stop { width: 14; color: $surface; background: $error; border: none; }
 #run:disabled, #stop:disabled { display: none; }
 
 /* Keep the useful shortcuts and readiness next to the prompt. */
-#status-bar { height: 3; padding: 1 3; }
+#status-bar { height: 3; padding: 1 4; }
+#shortcuts { width: 1fr; height: 1; }
 Footer {
     dock: none;
-    width: 1fr;
+    width: auto;
     height: 1;
     background: transparent;
     color: $secondary;
@@ -235,6 +252,19 @@ FooterKey, FooterLabel { background: transparent; color: $secondary; }
 FooterKey > .footer-key--key { background: transparent; color: $primary; text-style: bold; }
 FooterKey > .footer-key--description { background: transparent; color: $secondary; }
 FooterKey:hover, FooterKey:hover > .footer-key--key { background: $panel; color: $primary; }
+#activity-toggle {
+    width: auto;
+    min-width: 0;
+    height: 1;
+    margin-left: 2;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: $primary;
+    text-style: none;
+}
+
+#activity-toggle:hover, #activity-toggle:focus { background: $panel; text-style: bold; }
 #composer-label { width: auto; height: 1; color: $secondary; }
 #status-dot { width: 2; height: 1; margin-left: 1; text-align: right; color: $success; }
 
@@ -267,41 +297,43 @@ ApprovalScreen { align: center middle; padding: 0; background: $foreground 35%; 
 #approve { color: $surface; background: $primary; border: tall $primary; }
 #approve:hover, #approve:focus { background: $accent; border: tall $accent; }
 
-/* Spend fewer cells on chrome as the terminal gets smaller. */
-Screen.compact { padding: 0 1; }
+/* Keep the design's spacing at 28 rows; compress only genuinely small terminals. */
 Screen.compact #sidebar { display: none; }
 .compact #window-bar { padding: 1 2; }
-.compact #masthead { padding: 1 2 0 2; }
-.compact #workspace-bar { padding: 0 2; }
-.compact #conversation { padding: 0 2; }
-.compact #composer { padding: 1 2 0 2; }
-.compact #status-bar { padding: 1 2; }
-.compact .welcome { padding: 0 1; }
+.compact #masthead { padding: 1 3; }
+.compact #workspace-bar { padding: 0 3; }
+.compact #conversation { padding: 0 3; }
+.compact #composer { padding: 1 3 0 3; }
+.compact #status-bar { padding: 1 3; }
+.compact .welcome { padding: 1 2; }
 
-Screen.short { padding: 0 2; }
-Screen.short.compact { padding: 0 1; }
-.short #window-bar { height: 1; padding: 0 3; }
-.short #masthead { height: 2; padding: 1 3 0 3; }
-.short #composer { height: 3; padding: 0 3; }
-.short #status-bar { height: 2; padding: 0 3 1 3; }
+.short #window-bar { height: 1; padding: 0 4; }
+.short #masthead { height: 2; padding: 1 4 0 4; }
+.short #composer { height: 3; padding: 0 4; }
+.short #status-bar { height: 2; padding: 0 4 1 4; }
 .short .welcome { padding: 0 2; }
-.short.compact #window-bar { padding: 0 2; }
-.short.compact #masthead { padding: 1 2 0 2; }
-.short.compact #composer { padding: 0 2; }
-.short.compact #status-bar { padding: 0 2 1 2; }
-.short.compact .welcome { padding: 0 1; }
+.short .message-role { margin-bottom: 0; }
+.short .tool-card, .short .plan-card { padding-top: 0; padding-bottom: 0; }
+.short.compact #window-bar { padding: 0 3; }
+.short.compact #masthead { padding: 1 3 0 3; }
+.short.compact #composer { padding: 0 3; }
+.short.compact #status-bar { padding: 0 3 1 3; }
 
 Screen.narrow.compact { padding: 0; }
-.narrow #window-size, .narrow #stack-label { display: none; }
+.narrow #stack-label { display: none; }
+.narrow #branch { max-width: 12; margin-right: 1; }
 .narrow.compact #window-bar { padding: 1; }
-.narrow.compact #masthead { padding: 1 1 0 1; }
+.narrow.compact #masthead { padding: 1; }
 .narrow #workspace-bar { padding: 0 1; }
 .narrow #conversation { padding: 0 1; }
 .narrow.compact #composer { padding: 1 1 0 1; }
 .narrow.compact #status-bar { padding: 1; }
 .narrow.short #window-bar { padding: 0 1; }
+.narrow.short.compact #masthead { padding: 1 1 0 1; }
 .narrow.short #composer { padding: 0 1; }
 .narrow.short #status-bar { padding: 0 1 1 1; }
 .narrow #composer-label, .narrow #status-dot { display: none; }
+.narrow #run, .narrow #stop { width: 9; }
+.narrow.compact .welcome { padding: 0 1; }
 .narrow .tool-card, .narrow .plan-card { margin-left: 0; }
 .narrow #approval-dialog { width: 100%; height: 100%; padding: 0 1; }

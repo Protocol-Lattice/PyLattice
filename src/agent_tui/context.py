@@ -173,7 +173,7 @@ class ContextManager:
             if offset:
                 excerpt = f"[Starting at line {source.content.count(chr(10), 0, offset) + 1}]\n" + excerpt
             chunk = header + excerpt
-            lines.append(chunk)
+            lines.append(self.settings.redact(chunk))
             remaining -= len(chunk)
         return "".join(lines)
 

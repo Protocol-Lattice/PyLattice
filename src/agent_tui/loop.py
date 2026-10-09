@@ -272,6 +272,12 @@ class DefaultLoop:
                 await emit(AgentEvent("warning", agent.settings.redact(f"Run cleanup: {exc}")))
             finally:
                 if agent.settings.code_mode:
+                    close_runtime = getattr(agent.code_runtime, "aclose", None)
+                    if close_runtime is not None:
+                        try:
+                            await close_runtime()
+                        except Exception as exc:
+                            await emit(AgentEvent("warning", f"Code Mode cleanup: {exc}"))
                     agent.registry.unregister("execute_code")
                 agent.middleware.commands_enabled = False
                 if agent.subagents:

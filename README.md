@@ -76,7 +76,7 @@ change = await call_tool("apply_patchset", {
         },
         {
             "action": "create", "path": "src/new_module.py",
-            "content": "def new_function():\\n    return 42\\n",
+            "content": "def new_function():\n    return 42\n",
         },
     ]
 })

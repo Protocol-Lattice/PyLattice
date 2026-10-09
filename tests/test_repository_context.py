@@ -190,3 +190,18 @@ def test_workspace_cache_is_bounded_and_clear_resets_files(settings, tmp_path):
     context.clear()
     assert context.workspace_sources == {}
     assert context.workspace_context("cached") == ""
+
+
+async def test_context_collect_extracts_matching_window_inside_large_source(settings, tmp_path):
+    source = tmp_path / "module.py"
+    source.write_text("unchanged = 1\n" * 500 + "def needle():\n    return True\n")
+    registry, context = bound_registry(settings)
+    result = await registry.execute(
+        "context_collect", {"query": "needle", "max_files": 1, "max_chars": 750}
+    )
+    assert result.ok
+    item = json.loads(result.content)["files"][0]
+    assert item["path"] == "module.py"
+    assert item["start_line"] > 1
+    assert "def needle()" in item["content"]
+    assert "def needle()" in context.workspace_context("needle")

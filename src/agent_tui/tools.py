@@ -812,7 +812,6 @@ class ToolRegistry:
                 "read_file",
                 "search_files",
                 "context_collect",
-                "apply_patchset",
             }:
                 output = await asyncio.to_thread(self._execute_file_tool, name, arguments)
             else:

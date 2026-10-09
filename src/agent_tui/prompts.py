@@ -78,8 +78,12 @@ class DefaultPrompts:
         references = [
             ref for ref in (agent.memory.context(goal), agent.skills.catalog(goal)) if ref
         ]
-        if agent.settings.code_mode and hasattr(agent.context, "workspace_context"):
-            source_context = agent.context.workspace_context(goal)
-            if source_context:
-                references.insert(0, source_context)
-        return agent.context.build(system, goal, exchanges, schemas=schemas, references=references)
+        source_context = (
+            agent.context.workspace_context(goal)
+            if agent.settings.code_mode and hasattr(agent.context, "workspace_context")
+            else ""
+        )
+        return agent.context.build(
+            system, goal, exchanges, schemas=schemas, references=references,
+            workspace_context=source_context,
+        )

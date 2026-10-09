@@ -89,6 +89,8 @@ async def test_fallback_exposes_full_catalog(settings):
         "list_files",
         "read_file",
         "search_files",
+        "context_collect",
+        "apply_patchset",
         "write_file",
         "edit_file",
         "run_command",

@@ -137,8 +137,8 @@ class ContextManager:
             source = self.cached_file(path)
             if source is None:
                 continue
-            score = 4 * len(terms & keywords(path)) + len(
-                terms & keywords(source.content[:4000])
+            score = 4 * len(terms & keywords(path)) + sum(
+                term in source.content[:100_000].casefold() for term in terms
             )
             ranked.append((score, index, path, source))
         if not ranked:
@@ -160,9 +160,18 @@ class ContextManager:
             allowance = min(2200, remaining - len(header) - 80)
             if allowance <= 0:
                 break
-            excerpt = source.content[:allowance]
-            if len(excerpt) < len(source.content):
+            lower = source.content.casefold()
+            positions = [lower.find(term) for term in terms]
+            matching = [index for index in positions if index >= 0]
+            anchor = min(matching) if matching else 0
+            offset = max(0, anchor - allowance // 3)
+            if offset:
+                offset = source.content.rfind("\n", 0, offset) + 1
+            excerpt = source.content[offset : offset + allowance]
+            if offset or offset + len(excerpt) < len(source.content):
                 excerpt += "\n[Cached file excerpt; context_collect can recall more]"
+            if offset:
+                excerpt = f"[Starting at line {source.content.count(chr(10), 0, offset) + 1}]\n" + excerpt
             chunk = header + excerpt
             lines.append(chunk)
             remaining -= len(chunk)

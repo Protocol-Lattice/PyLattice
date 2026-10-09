@@ -171,7 +171,8 @@ class ContextManager:
             if offset or offset + len(excerpt) < len(source.content):
                 excerpt += "\n[Cached file excerpt; context_collect can recall more]"
             if offset:
-                excerpt = f"[Starting at line {source.content.count(chr(10), 0, offset) + 1}]\n" + excerpt
+                line_number = source.content.count("\n", 0, offset) + 1
+                excerpt = f"[Starting at line {line_number}]\n" + excerpt
             chunk = header + excerpt
             lines.append(self.settings.redact(chunk))
             remaining -= len(chunk)

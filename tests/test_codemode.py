@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 from dataclasses import replace
 
@@ -816,3 +817,47 @@ async def test_failed_nested_tool_keeps_its_error_code_and_partial_output(settin
     nested = reply["output"]["tools"][0]
     assert nested["error"] == reply["error"]
     assert nested["output"] == {"completed": 2, "remaining": 1}
+
+
+async def test_code_mode_reuses_one_monty_pool_and_repository_context_between_programs(
+    settings, tmp_path, monkeypatch
+):
+    from agent_tui import defaults
+
+    source = tmp_path / "source.py"
+    source.write_text("VALUE = 1\\n")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_pool = defaults.AsyncMonty
+    constructed = []
+
+    def make_pool(*args, **kwargs):
+        pool = original_pool(*args, **kwargs)
+        constructed.append(pool)
+        return pool
+
+    monkeypatch.setattr(defaults, "AsyncMonty", make_pool)
+    agent, executor = agent_for(
+        settings,
+        'result = await call_tool("context_collect", {"paths": ["source.py"]})\\n'
+        'result["output"]',
+        'result = await call_tool("apply_patchset", {"changes": ['
+        '{"action": "edit", "path": "source.py", "old_text": "VALUE = 1", '
+        '"new_text": "VALUE = 2", "expected_sha256": "' + digest + '"}, '
+        '{"action": "create", "path": "new.py", "content": "NEW = True\\\\n"}'
+        ']})\\nresult["output"]',
+        'result = await call_tool("context_collect", {"paths": ["source.py", "new.py"]})\\n'
+        'result["output"]',
+        auto_approve=True,
+    )
+    result = await agent.run("Refactor VALUE", ignore, deny)
+    assert result.status == "completed", result.message
+    assert len(constructed) == 1
+    assert agent.code_runtime._pool is None
+    assert source.read_text() == "VALUE = 2\\n"
+    assert (tmp_path / "new.py").read_text() == "NEW = True\\n"
+    # The next model invocation receives a verified source cache reference.
+    second_system = executor.requests[1][0][0]["content"]
+    assert "Repository source cache" in second_system
+    assert "source.py" in second_system
+    assert "VALUE = 1" in second_system
+    assert "VALUE = 2" in agent.context.workspace_context("VALUE")

@@ -154,8 +154,14 @@ async def test_patchset_rolls_back_on_mid_commit_failure(settings, tmp_path, mon
     result = await registry.execute(
         "apply_patchset",
         {"changes": [
-            {"action": "edit", "path": "first.py", "old_text": "first = 1", "new_text": "first = 2"},
-            {"action": "edit", "path": "second.py", "old_text": "second = 1", "new_text": "second = 2"},
+            {
+                "action": "edit", "path": "first.py",
+                "old_text": "first = 1", "new_text": "first = 2",
+            },
+            {
+                "action": "edit", "path": "second.py",
+                "old_text": "second = 1", "new_text": "second = 2",
+            },
         ]},
     )
     assert not result.ok

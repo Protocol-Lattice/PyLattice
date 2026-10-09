@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from typing import Any
 
 from pydantic_monty import AsyncMonty, CollectString, MontyError, MontySyntaxError, MontyTypingError
@@ -222,6 +223,7 @@ async def execute_code(
     run_tool: ToolRunner,
     *,
     format_result: Callable[[ToolResult], dict[str, Any]] = ToolResult.as_dict,
+    pool: AsyncMonty | None = None,
 ) -> ToolResult:
     """Expose only a JSON tool bridge; never share host objects, mounts or OS handlers."""
     if not code.strip() or len(code) > MAX_CODE_CHARS:
@@ -282,8 +284,12 @@ async def execute_code(
 
     try:
         async with (
-            AsyncMonty(max_processes=1, request_timeout=EXECUTION_SECONDS + 2) as pool,
-            pool.checkout(
+            (
+                nullcontext(pool)
+                if pool is not None
+                else AsyncMonty(max_processes=1, request_timeout=EXECUTION_SECONDS + 2)
+            ) as runtime_pool,
+            runtime_pool.checkout(
                 type_check=True,
                 type_check_stubs=TOOL_BRIDGE_STUBS,
                 type_check_format="concise",

@@ -700,7 +700,7 @@ class ToolRegistry:
                 return self.sanitize(result, name)
             if name == "run_command":
                 output = await self._run_command(**arguments)
-            elif name in {"list_files", "read_file", "search_files"}:
+            elif name in {"list_files", "read_file", "search_files", "context_collect"}:
                 output = await asyncio.to_thread(self._execute_file_tool, name, arguments)
             else:
                 output = self._execute_file_tool(name, arguments)
@@ -735,6 +735,8 @@ class ToolRegistry:
                     "list_files": "files",
                     "read_file": "content",
                     "search_files": "matches",
+                    "context_collect": "files",
+                    "apply_patchset": "changes",
                     "run_command": "output",
                 }.get(name)
                 if (
@@ -761,6 +763,10 @@ class ToolRegistry:
         return ToolResult(result.ok, text, error, truncated)
 
     def _execute_file_tool(self, name: str, args: dict[str, Any]) -> Any:
+        if name == "context_collect":
+            return self._collect_context(args)
+        if name == "apply_patchset":
+            return self._apply_patchset(args)
         if name == "finish":
             return args["summary"]
         if name in {"write_file", "edit_file"}:
@@ -779,6 +785,8 @@ class ToolRegistry:
             finally:
                 if temp_name and os.path.exists(temp_name):
                     os.unlink(temp_name)
+            if self.context is not None and hasattr(self.context, "cache_file"):
+                self.context.cache_file(str(path.relative_to(self.root)), content)
             return {"path": str(path.relative_to(self.root)), "bytes": len(content.encode("utf-8"))}
         path = self.resolve(args.get("path", "."))
         if name == "list_files":
@@ -790,7 +798,10 @@ class ToolRegistry:
                 entries.append(str(item.relative_to(self.root)))
             return {"files": entries, "truncated": False}
         if name == "read_file":
-            lines = self._read_text(path).splitlines()
+            source = self._read_text(path)
+            if self.context is not None and hasattr(self.context, "cache_file"):
+                self.context.cache_file(str(path.relative_to(self.root)), source)
+            lines = source.splitlines()
             start = args.get("start_line", 1)
             end = args.get("end_line", start + 249)
             if end < start:

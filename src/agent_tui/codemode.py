@@ -111,7 +111,8 @@ fallback actions in an except block to work around a tool failure or denied appr
    search_files: {"matches": [{"path": str, "line": int, "text": str}],
                   "truncated": bool, "skipped": int}; query is literal text, not regex.
    context_collect: {"files": [{"path": str, "sha256": str, "content": str,
-                      "total_lines": int, "excerpt": bool}], "truncated": bool}.
+                      "start_line": int, "total_lines": int, "excerpt": bool}],
+                      "disk_reads": int, "index_hits": int, "truncated": bool}.
    apply_patchset: {"changes": [{"path": str, "bytes": int}], "count": int}.
    edit_file/write_file: {"path": str, "bytes": int}.
    run_command: {"exit_code": int, "output": str, "truncated": bool, "timed_out": bool}.
